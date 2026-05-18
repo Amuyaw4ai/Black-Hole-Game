@@ -198,6 +198,18 @@ export default function App() {
     return () => observer.disconnect();
   }, []);
 
+  const [isMorphing, setIsMorphing] = useState(false);
+
+  useEffect(() => {
+    // TRIGGER: When 5P game loads or resets on mobile portrait
+    const isMobilePortrait = containerWidth < 640 && containerWidth < containerHeight;
+    if (playerCount === 5 && isMobilePortrait) {
+      setIsMorphing(true);
+      const timer = setTimeout(() => setIsMorphing(false), 1200);
+      return () => clearTimeout(timer);
+    }
+  }, [playerCount, gameStatus, containerWidth]); // Properly reactive to containerWidth
+
   const circleSize = useMemo(() => {
     if (containerHeight === 0 || containerWidth === 0) return 60;
     
@@ -232,8 +244,9 @@ export default function App() {
         ...({ '--h-height-lg': '5rem', '--f-height-lg': '2rem' } as any)
       } as any}
     >
-      <div className="fixed inset-0 bg-[radial-gradient(circle_at_50%_0%,#0a101f_0%,#000000_100%)] pointer-events-none opacity-60" />
-      <div className="fixed inset-0 opacity-[0.03] pointer-events-none mix-blend-overlay bg-[url('https://grainy-gradients.vercel.app/noise.svg')]" />
+      <div className="fixed inset-0 bg-[#000000] pointer-events-none" />
+      <div className="fixed inset-0 bg-[radial-gradient(circle_at_50%_0%,#091121_0%,#000000_100%)] pointer-events-none opacity-90" />
+      <div className="fixed inset-0 opacity-[0.06] pointer-events-none mix-blend-overlay bg-[url('https://grainy-gradients.vercel.app/noise.svg')]" />
 
       {/* RE-ARCHITECTED COMPACT HEADER */}
       <header className="h-[var(--h-height)] lg:h-[var(--h-height-lg)] shrink-0 border-b border-white/5 bg-black/40 backdrop-blur-md flex items-center justify-between px-3 sm:px-8 relative z-50 transition-all duration-300">
@@ -548,31 +561,62 @@ export default function App() {
           >
             {/* Pyramid Scaling logic: Dynamic engine based on parent pixel height */}
             {playerCount === 5 && containerWidth < 640 && (containerWidth < containerHeight) ? (
-              /* HYBRID ROUTER: 5P MOBILE PORTRAIT TRIANGLE (LEFT JUSTIFIED) */
+              /* HYBRID ROUTER: 5P MOBILE PORTRAIT TRIANGLE (LEFT JUSTIFIED + MORPH INTRO) */
               <div 
-                className="flex flex-col items-start gap-1 p-6 bg-white/[0.03] border border-white/10 rounded-3xl shadow-2xl backdrop-blur-md relative z-10"
+                className="flex flex-col items-start gap-1 p-6 relative"
                 style={{ 
                   width: 'fit-content',
-                  maxHeight: '75%'
+                  maxHeight: '75%',
+                  willChange: 'transform'
                 }}
               >
+                {/* GHOST WATERMARK: 5% Opacity Pascal Ghost (Stay Visible) */}
+                <div className="absolute top-6 left-1/2 -translate-x-1/2 pointer-events-none opacity-[0.08] flex flex-col items-center gap-1 z-0 w-full h-full">
+                  {rows.map((row, rIdx) => (
+                    <div key={`ghost-${rIdx}`} className="flex gap-1">
+                      {row.map((_, cIdx) => (
+                        <div key={`ghost-c-${cIdx}`} className="w-8 h-8 rounded-full border border-white/20" />
+                      ))}
+                    </div>
+                  ))}
+                </div>
+
                 {rows.map((row, rIdx) => (
-                  <div key={rIdx} className="flex gap-1 relative">
+                  <div key={rIdx} className="flex gap-1 relative z-10">
                     {row.map((circle) => {
                       const bIdx = board.findIndex(c => c.row === circle.row && c.col === circle.col);
                       const isPulsing = pulsingNeighbors.includes(bIdx);
                       const isRevealNeighbor = blackHoleNeighbors.includes(bIdx);
                       
                       const playerColor = 
-                        currentPlayer === 1 ? 'rgba(37,99,235,0.4)' : 
-                        currentPlayer === 2 ? 'rgba(239,68,68,0.4)' : 
-                        currentPlayer === 3 ? 'rgba(16,185,129,0.4)' : 
-                        currentPlayer === 4 ? 'rgba(147,51,234,0.4)' : 'rgba(245,158,11,0.4)';
+                        currentPlayer === 1 ? 'rgba(37,99,235,1)' : 
+                        currentPlayer === 2 ? 'rgba(239,68,68,1)' : 
+                        currentPlayer === 3 ? 'rgba(16,185,129,1)' : 
+                        currentPlayer === 4 ? 'rgba(147,51,234,1)' : 'rgba(245,158,11,1)';
 
+                      // GRAVITATIONAL SHEAR PHYSICS
+                      const shearSpacing = 36; 
+                      const maxRowLen = rows[rows.length - 1].length;
+                      
+                      // Displacement from centered to left-justified
+                      // We want Row r to start centered relative to the max row width
+                      const pascalX = ((maxRowLen * shearSpacing) / 2) - (((rIdx + 1) * shearSpacing) / 2);
+                      const targetX = 0;
+                      
                       return (
                         <motion.button
                           key={`${circle.row}-${circle.col}`}
                           id={`circle-${circle.row}-${circle.col}`}
+                          initial={{ x: pascalX, opacity: 0 }}
+                          animate={{ 
+                            x: isMorphing ? pascalX : targetX,
+                            opacity: 1
+                          }}
+                          transition={{ 
+                            duration: 1.2,
+                            ease: [0.34, 1.56, 0.64, 1], // Custom bouncy shear ease
+                            delay: isMorphing ? 0 : rIdx * 0.03 // Staggered pull
+                          }}
                           onMouseEnter={() => setHoveredCircle(bIdx)}
                           onMouseLeave={() => setHoveredCircle(null)}
                           onTouchStart={() => setHoveredCircle(bIdx)}
@@ -587,18 +631,26 @@ export default function App() {
                             ${circle.claimedBy === 3 ? 'bg-emerald-600 shadow-[0_0_15px_rgba(16,185,129,0.4)] border border-emerald-400' : ''}
                             ${circle.claimedBy === 4 ? 'bg-purple-600 shadow-[0_0_15px_rgba(147,51,234,0.4)] border border-purple-400' : ''}
                             ${circle.claimedBy === 5 ? 'bg-amber-500 shadow-[0_0_20px_rgba(245,158,11,0.6)] border border-amber-300' : ''}
-                            ${!circle.value && gameStatus === 'playing' ? 'bg-white/10 border border-white/5 opacity-80' : ''}
+                            ${!circle.value && gameStatus === 'playing' ? 'bg-white/10 border border-white/5 opacity-80 hover:bg-white/20' : ''}
                             ${circle.value === null && gameStatus !== 'playing' ? 'bg-white/20 border-2 border-white/40 animate-pulse' : ''}
                             ${!circle.value && gameStatus !== 'playing' && circle.value !== null ? 'opacity-10 scale-90 grayscale' : ''}
-                            ${isPulsing ? 'animate-pulse scale-105 opacity-100 z-20' : ''}
+                            ${isPulsing ? 'scale-110 z-20' : ''}
                             ${isRevealNeighbor ? 'scale-110 shadow-[0_0_40px_white] z-30 transition-none' : ''}
                           `}
-                          style={{ 
-                            fontSize: '10px',
-                            boxShadow: isPulsing ? `0 0 20px ${playerColor}` : undefined
-                          }}
                         >
-                          <span className="italic">{circle.value}</span>
+                          {/* LONG-PRESS PULSE: 15% Opacity Halo */}
+                          <AnimatePresence>
+                            {isPulsing && (
+                              <motion.div 
+                                initial={{ scale: 0.5, opacity: 0 }}
+                                animate={{ scale: 1.5, opacity: 0.15 }}
+                                exit={{ scale: 2, opacity: 0 }}
+                                className="absolute inset-0 rounded-full pointer-events-none"
+                                style={{ backgroundColor: playerColor, filter: 'blur(8px)' }}
+                              />
+                            )}
+                          </AnimatePresence>
+                          <span className="italic relative z-10">{circle.value}</span>
                         </motion.button>
                       );
                     })}
@@ -620,10 +672,10 @@ export default function App() {
                       const isRevealNeighbor = blackHoleNeighbors.includes(boardIndex);
 
                       const playerColor = 
-                        currentPlayer === 1 ? 'rgba(37,99,235,0.4)' : 
-                        currentPlayer === 2 ? 'rgba(239,68,68,0.4)' : 
-                        currentPlayer === 3 ? 'rgba(16,185,129,0.4)' : 
-                        currentPlayer === 4 ? 'rgba(147,51,234,0.4)' : 'rgba(245,158,11,0.4)';
+                        currentPlayer === 1 ? 'rgba(37,99,235,1)' : 
+                        currentPlayer === 2 ? 'rgba(239,68,68,1)' : 
+                        currentPlayer === 3 ? 'rgba(16,185,129,1)' : 
+                        currentPlayer === 4 ? 'rgba(147,51,234,1)' : 'rgba(245,158,11,1)';
                       
                       return (
                         <motion.button
@@ -645,18 +697,29 @@ export default function App() {
                             ${circle.claimedBy === 4 ? 'bg-purple-600 shadow-[0_5px_25px_rgba(147,51,234,0.4)] border-2 border-purple-400' : ''}
                             ${circle.claimedBy === 5 ? 'bg-amber-500 shadow-[0_5px_30px_rgba(245,158,11,0.6)] border-2 border-amber-300' : ''}
                             ${!circle.value && gameStatus === 'playing' ? 'bg-white/5 border border-white/10 hover:bg-white/20 active:bg-white/30 cursor-pointer shadow-inner' : ''}
-                            ${isBlackHole && gameStatus !== 'playing' ? 'bg-gradient-to-br from-black via-gray-900 to-black border-2 border-dashed border-white/40 shadow-[0_0_70px_rgba(255,255,255,0.2)] scale-110 sm:scale-125 z-20 pulse-ring' : ''}
-                            ${!circle.value && gameStatus !== 'playing' && !isBlackHole ? 'opacity-5 scale-90 blur-sm grayscale pointer-events-none' : ''}
-                            ${isPulsing ? 'animate-pulse scale-110 opacity-100 z-20' : ''}
+                            ${circle.value === null && gameStatus !== 'playing' ? 'bg-gradient-to-br from-black via-gray-900 to-black border-2 border-dashed border-white/40 shadow-[0_0_70px_rgba(255,255,255,0.2)] scale-110 sm:scale-125 z-20 pulse-ring' : ''}
+                            ${!circle.value && gameStatus !== 'playing' && circle.value !== null ? 'opacity-5 scale-90 blur-sm grayscale pointer-events-none' : ''}
+                            ${isPulsing ? 'scale-110 z-20' : ''}
                             ${isRevealNeighbor ? 'scale-110 shadow-[0_0_60px_white] z-30 transition-none' : ''}
                           `}
                           style={{ 
                             width: `${circleSize}px`, 
                             height: `${circleSize}px`,
-                            fontSize: `${circleSize * 0.45}px`,
-                            boxShadow: isPulsing ? `0 0 30px ${playerColor}` : undefined
+                            fontSize: `${circleSize * 0.45}px`
                           }}
                         >
+                          {/* LONG-PRESS PULSE: 15% Opacity Halo */}
+                          <AnimatePresence>
+                            {isPulsing && (
+                              <motion.div 
+                                initial={{ scale: 0.5, opacity: 0 }}
+                                animate={{ scale: 1.6, opacity: 0.12 }}
+                                exit={{ scale: 2.2, opacity: 0 }}
+                                className="absolute inset-0 rounded-full pointer-events-none"
+                                style={{ backgroundColor: playerColor, filter: 'blur(10px)' }}
+                              />
+                            )}
+                          </AnimatePresence>
                           {isBlackHole && gameStatus !== 'playing' && (
                             <motion.div 
                               animate={{ scale: [1, 1.2, 1], opacity: [0.3, 0.6, 0.3] }}
