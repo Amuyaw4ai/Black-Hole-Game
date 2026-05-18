@@ -90,12 +90,19 @@ export default function App() {
   }, [hoveredCircle, board, gameStatus, totalRows]);
 
   const blackHoleNeighbors = useMemo(() => {
-    if (gameStatus !== 'revealed') return [];
+    if (gameStatus !== 'revealed' && gameStatus !== 'finished') return [];
     const bh = board.find(c => c.value === null);
     if (!bh) return [];
     const neighborCoords = getNeighbors(bh.row, bh.col);
     return neighborCoords.map(([nr, nc]) => board.findIndex(b => b.row === nr && b.col === nc)).filter(i => i !== -1);
   }, [board, gameStatus, totalRows]);
+
+  const scoringCircles = useMemo(() => {
+    if (gameStatus === 'playing') return [];
+    const bhIndex = board.findIndex(c => c.value === null);
+    if (bhIndex === -1) return [];
+    return [bhIndex, ...blackHoleNeighbors];
+  }, [board, gameStatus, blackHoleNeighbors]);
 
   const handleCircleClick = (index: number) => {
     if (gameStatus !== 'playing' || board[index].value !== null) return;
@@ -201,11 +208,11 @@ export default function App() {
   const [isMorphing, setIsMorphing] = useState(false);
 
   useEffect(() => {
-    // TRIGGER: When 5P game loads or resets on mobile portrait
+    // TRIGGER: Future-proofed morphing (Only for 6P+ on mobile portrait)
     const isMobilePortrait = containerWidth < 640 && containerWidth < containerHeight;
-    if (playerCount === 5 && isMobilePortrait) {
+    if (playerCount >= 6 && isMobilePortrait) {
       setIsMorphing(true);
-      const timer = setTimeout(() => setIsMorphing(false), 1200);
+      const timer = setTimeout(() => setIsMorphing(false), 400);
       return () => clearTimeout(timer);
     }
   }, [playerCount, gameStatus, containerWidth]); // Properly reactive to containerWidth
@@ -226,7 +233,7 @@ export default function App() {
     const sizeFromHeight = availableHeight / totalRows;
     
     // Width-based calculation (widest row has totalRows circles)
-    const safetyWidth = containerWidth * 0.95; // More liberal width safety
+    const safetyWidth = containerWidth * 0.98; // Maximizing width for 8-row layout
     const availableWidth = safetyWidth - (totalGaps * GAP);
     const sizeFromWidth = availableWidth / totalRows;
     
@@ -517,35 +524,39 @@ export default function App() {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -30 }}
                 transition={{ type: "spring", damping: 20, stiffness: 100 }}
-                className="absolute top-4 sm:top-6 left-0 right-0 z-40 flex lg:hidden items-center justify-between px-2 sm:px-6 pointer-events-none"
+                className="absolute top-4 sm:top-12 left-2 right-2 z-40 flex items-start justify-between pointer-events-none lg:hidden"
               >
-                {/* LEFT WING - THE VICTOR (HIGH VISIBILITY) */}
+                {/* LEFT WING - THE VICTOR */}
                 <div className={`
-                  pointer-events-auto flex items-center gap-2 px-4 py-2 rounded-xl border-2 transition-all shadow-[0_20px_50px_rgba(0,0,0,0.5)] scale-110 sm:scale-125 origin-left ml-2
-                  ${isDraw ? 'bg-gray-800 border-white/20 text-white' : 'bg-white border-blue-600 text-black shadow-blue-500/30'}
+                  pointer-events-auto flex items-center gap-2 px-4 py-3 rounded-2xl border-2 transition-all shadow-[0_20px_60px_rgba(0,0,0,0.6)]
+                  ${isDraw ? 'bg-gray-800 border-white/20 text-white' : 'bg-white border-blue-600 text-black shadow-blue-500/40'}
                 `}>
-                  {!isDraw && <Trophy size={16} className="text-blue-600 fill-blue-600/10" />}
+                  {!isDraw && <Trophy size={18} className="text-blue-600 fill-blue-600/10" />}
                   <div className="flex flex-col leading-none">
-                    <span className="text-[11px] sm:text-[13px] font-black italic tracking-tight uppercase">
+                    <span className="text-xs sm:text-sm font-black italic tracking-tight uppercase">
                       {isDraw ? "SUDDEN DRAW" : `P${winner} VICTOR`}
                     </span>
-                    {!isDraw && <span className="text-[7px] font-black opacity-60 uppercase tracking-widest mt-1">SUM: {minScore}</span>}
+                    {!isDraw && <span className="text-[8px] font-black opacity-60 uppercase tracking-widest mt-1">BEST SUM: {minScore}</span>}
                   </div>
                 </div>
 
-                {/* RIGHT WING - STANDINGS (HIGH CONTRAST) */}
-                <div className="pointer-events-auto flex items-center bg-gray-900/90 backdrop-blur-2xl border border-white/20 rounded-xl px-3 py-2 shadow-2xl mr-2">
-                  <div className="flex items-center gap-3 sm:gap-4">
+                {/* RIGHT WING - STANDINGS BADGE (Square Badge) */}
+                <div className="pointer-events-auto bg-gray-800/80 backdrop-blur-xl border border-white/10 rounded-2xl p-3 shadow-2xl w-[100px] sm:w-[120px]">
+                  <h4 className="text-[7px] font-black uppercase tracking-widest opacity-30 mb-2 border-b border-white/5 pb-1">Standings</h4>
+                  <div className="grid grid-cols-2 gap-x-2 gap-y-1.5">
                     {[1, 2, 3, 4, 5].filter(p => p <= playerCount).map(p => (
-                      <div key={p} className="flex items-center gap-1.5 sm:gap-2">
-                         <div className={`w-2 h-2 rounded-full ring-2 ring-black ${
-                           p === 1 ? 'bg-blue-500' : 
-                           p === 2 ? 'bg-red-500' : 
-                           p === 3 ? 'bg-emerald-500' : 
-                           p === 4 ? 'bg-purple-500' : 'bg-amber-500'
-                         } ${winners.includes(p) ? 'animate-pulse scale-110 shadow-[0_0_10px_rgba(245,158,11,0.8)]' : 'opacity-20'}`} />
-                         <span className={`text-[10px] sm:text-xs font-black tracking-tighter ${winners.includes(p) ? 'text-white' : 'text-white/40'}`}>
-                           P{p}:<span className="ml-0.5">{scores[`p${p}` as keyof typeof scores]}</span>
+                      <div key={p} className="flex flex-col gap-0.5">
+                         <div className="flex items-center gap-1">
+                           <div className={`w-1.5 h-1.5 rounded-full ${
+                             p === 1 ? 'bg-blue-500' : 
+                             p === 2 ? 'bg-red-500' : 
+                             p === 3 ? 'bg-emerald-500' : 
+                             p === 4 ? 'bg-purple-500' : 'bg-amber-500'
+                           } ${winners.includes(p) ? 'shadow-[0_0_8px_currentColor]' : 'opacity-20'}`} />
+                           <span className={`text-[8px] font-black uppercase tracking-tighter ${winners.includes(p) ? 'text-white' : 'text-white/30'}`}>P{p}</span>
+                         </div>
+                         <span className={`text-[10px] sm:text-xs font-black italic leading-none ml-2.5 ${winners.includes(p) ? 'text-white' : 'text-white/20'}`}>
+                           {scores[`p${p}` as keyof typeof scores]}
                          </span>
                       </div>
                     ))}
@@ -560,8 +571,8 @@ export default function App() {
             className="flex-1 w-full h-full max-h-[85vh] flex items-center justify-center overflow-hidden pt-12 sm:pt-0 relative"
           >
             {/* Pyramid Scaling logic: Dynamic engine based on parent pixel height */}
-            {playerCount === 5 && containerWidth < 640 && (containerWidth < containerHeight) ? (
-              /* HYBRID ROUTER: 5P MOBILE PORTRAIT TRIANGLE (LEFT JUSTIFIED + MORPH INTRO) */
+            {(playerCount as number) >= 6 && containerWidth < 640 && (containerWidth < containerHeight) ? (
+              /* HYBRID ROUTER: FUTURE MORPH (LEFT JUSTIFIED + MORPH INTRO) */
               <div 
                 className="flex flex-col items-start gap-1 p-6 relative"
                 style={{ 
@@ -570,23 +581,13 @@ export default function App() {
                   willChange: 'transform'
                 }}
               >
-                {/* GHOST WATERMARK: 5% Opacity Pascal Ghost (Stay Visible) */}
-                <div className="absolute top-6 left-1/2 -translate-x-1/2 pointer-events-none opacity-[0.08] flex flex-col items-center gap-1 z-0 w-full h-full">
-                  {rows.map((row, rIdx) => (
-                    <div key={`ghost-${rIdx}`} className="flex gap-1">
-                      {row.map((_, cIdx) => (
-                        <div key={`ghost-c-${cIdx}`} className="w-8 h-8 rounded-full border border-white/20" />
-                      ))}
-                    </div>
-                  ))}
-                </div>
-
                 {rows.map((row, rIdx) => (
                   <div key={rIdx} className="flex gap-1 relative z-10">
                     {row.map((circle) => {
                       const bIdx = board.findIndex(c => c.row === circle.row && c.col === circle.col);
                       const isPulsing = pulsingNeighbors.includes(bIdx);
-                      const isRevealNeighbor = blackHoleNeighbors.includes(bIdx);
+                      const isScoring = scoringCircles.includes(bIdx);
+                      const isBlackHole = circle.value === null;
                       
                       const playerColor = 
                         currentPlayer === 1 ? 'rgba(37,99,235,1)' : 
@@ -598,8 +599,6 @@ export default function App() {
                       const shearSpacing = 36; 
                       const maxRowLen = rows[rows.length - 1].length;
                       
-                      // Displacement from centered to left-justified
-                      // We want Row r to start centered relative to the max row width
                       const pascalX = ((maxRowLen * shearSpacing) / 2) - (((rIdx + 1) * shearSpacing) / 2);
                       const targetX = 0;
                       
@@ -610,12 +609,16 @@ export default function App() {
                           initial={{ x: pascalX, opacity: 0 }}
                           animate={{ 
                             x: isMorphing ? pascalX : targetX,
-                            opacity: 1
+                            opacity: gameStatus !== 'playing' && !isScoring ? 0.2 : 1,
+                            scale: isScoring ? [1, 1.05, 1] : 1,
                           }}
                           transition={{ 
-                            duration: 1.2,
-                            ease: [0.34, 1.56, 0.64, 1], // Custom bouncy shear ease
-                            delay: isMorphing ? 0 : rIdx * 0.03 // Staggered pull
+                            x: {
+                              duration: 0.4,
+                              ease: [0.175, 0.885, 0.32, 1.275],
+                              delay: isMorphing ? 0 : rIdx * 0.01
+                            },
+                            scale: isScoring ? { repeat: Infinity, duration: 2, ease: "easeInOut" } : { duration: 0.3 }
                           }}
                           onMouseEnter={() => setHoveredCircle(bIdx)}
                           onMouseLeave={() => setHoveredCircle(null)}
@@ -632,10 +635,10 @@ export default function App() {
                             ${circle.claimedBy === 4 ? 'bg-purple-600 shadow-[0_0_15px_rgba(147,51,234,0.4)] border border-purple-400' : ''}
                             ${circle.claimedBy === 5 ? 'bg-amber-500 shadow-[0_0_20px_rgba(245,158,11,0.6)] border border-amber-300' : ''}
                             ${!circle.value && gameStatus === 'playing' ? 'bg-white/10 border border-white/5 opacity-80 hover:bg-white/20' : ''}
-                            ${circle.value === null && gameStatus !== 'playing' ? 'bg-white/20 border-2 border-white/40 animate-pulse' : ''}
-                            ${!circle.value && gameStatus !== 'playing' && circle.value !== null ? 'opacity-10 scale-90 grayscale' : ''}
+                            ${isBlackHole && gameStatus !== 'playing' ? 'bg-gradient-to-br from-black via-gray-900 to-black border-2 border-dashed border-white/40 shadow-[0_0_70px_rgba(255,255,255,0.2)] pulse-ring' : ''}
+                            ${!circle.value && gameStatus !== 'playing' && !isBlackHole ? 'grayscale' : ''}
                             ${isPulsing ? 'scale-110 z-20' : ''}
-                            ${isRevealNeighbor ? 'scale-110 shadow-[0_0_40px_white] z-30 transition-none' : ''}
+                            ${isScoring ? 'border-2 border-blue-500 shadow-[0_0_30px_rgba(30,144,255,1)] z-30 transition-none' : ''}
                           `}
                         >
                           {/* LONG-PRESS PULSE: 15% Opacity Halo */}
@@ -669,7 +672,7 @@ export default function App() {
                       const boardIndex = board.findIndex(c => c.row === circle.row && c.col === circle.col);
                       const isBlackHole = circle.value === null;
                       const isPulsing = pulsingNeighbors.includes(boardIndex);
-                      const isRevealNeighbor = blackHoleNeighbors.includes(boardIndex);
+                      const isScoring = scoringCircles.includes(boardIndex);
 
                       const playerColor = 
                         currentPlayer === 1 ? 'rgba(37,99,235,1)' : 
@@ -681,6 +684,13 @@ export default function App() {
                         <motion.button
                           key={`${circle.row}-${circle.col}`}
                           id={`circle-${circle.row}-${circle.col}`}
+                          animate={{
+                            opacity: gameStatus !== 'playing' && !isScoring ? 0.2 : 1,
+                            scale: isScoring ? [1, 1.05, 1] : 1,
+                          }}
+                          transition={{
+                            scale: isScoring ? { repeat: Infinity, duration: 2, ease: "easeInOut" } : { duration: 0.3 }
+                          }}
                           onMouseEnter={() => setHoveredCircle(boardIndex)}
                           onMouseLeave={() => setHoveredCircle(null)}
                           onTouchStart={() => setHoveredCircle(boardIndex)}
@@ -697,10 +707,10 @@ export default function App() {
                             ${circle.claimedBy === 4 ? 'bg-purple-600 shadow-[0_5px_25px_rgba(147,51,234,0.4)] border-2 border-purple-400' : ''}
                             ${circle.claimedBy === 5 ? 'bg-amber-500 shadow-[0_5px_30px_rgba(245,158,11,0.6)] border-2 border-amber-300' : ''}
                             ${!circle.value && gameStatus === 'playing' ? 'bg-white/5 border border-white/10 hover:bg-white/20 active:bg-white/30 cursor-pointer shadow-inner' : ''}
-                            ${circle.value === null && gameStatus !== 'playing' ? 'bg-gradient-to-br from-black via-gray-900 to-black border-2 border-dashed border-white/40 shadow-[0_0_70px_rgba(255,255,255,0.2)] scale-110 sm:scale-125 z-20 pulse-ring' : ''}
-                            ${!circle.value && gameStatus !== 'playing' && circle.value !== null ? 'opacity-5 scale-90 blur-sm grayscale pointer-events-none' : ''}
+                            ${circle.value === null && gameStatus !== 'playing' ? 'bg-gradient-to-br from-black via-gray-900 to-black border-2 border-dashed border-white/40 shadow-[0_0_70px_rgba(255,255,255,0.2)] pulse-ring' : ''}
+                            ${!circle.value && gameStatus !== 'playing' && circle.value !== null ? 'grayscale' : ''}
                             ${isPulsing ? 'scale-110 z-20' : ''}
-                            ${isRevealNeighbor ? 'scale-110 shadow-[0_0_60px_white] z-30 transition-none' : ''}
+                            ${isScoring ? 'border-2 border-blue-500 shadow-[0_0_30px_rgba(30,144,255,1)] z-30 transition-none' : ''}
                           `}
                           style={{ 
                             width: `${circleSize}px`, 
