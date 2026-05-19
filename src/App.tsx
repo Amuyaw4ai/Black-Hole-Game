@@ -12,38 +12,56 @@ interface CircleState {
 type GameStatus = 'playing' | 'finished' | 'revealed';
 
 interface BoardConfig {
+  id: string;
   rows: number;
-  turns: number;
+  players: number;
+  turnsPerPlayer: number;
+  status: 'Active' | 'Dormant';
+  label: string;
 }
 
-const BOARD_CONFIGS: Record<string, BoardConfig> = {
-  '4P_Sprint': { rows: 6, turns: 5 },
-  '4P_Marathon': { rows: 9, turns: 11 },
-  '5P_TournamentPro': { rows: 8, turns: 7 },
-  '9P_Sprint': { rows: 7, turns: 3 },
-  '9P_Marathon': { rows: 10, turns: 6 },
-};
+const BOARD_CONFIGS: BoardConfig[] = [
+  // 6 Rows (21 circles, 20 playable)
+  { id: 'R6_P2', rows: 6, players: 2, turnsPerPlayer: 10, status: 'Active', label: 'Standard' },
+  { id: 'R6_P4', rows: 6, players: 4, turnsPerPlayer: 5, status: 'Active', label: 'Sprint' },
+
+  // 7 Rows (28 circles, 27 playable)
+  { id: 'R7_P3', rows: 7, players: 3, turnsPerPlayer: 9, status: 'Active', label: 'Standard' },
+  { id: 'R7_P9', rows: 7, players: 9, turnsPerPlayer: 3, status: 'Dormant', label: 'Chaos' },
+
+  // 8 Rows (36 circles, 35 playable)
+  { id: 'R8_P5', rows: 8, players: 5, turnsPerPlayer: 7, status: 'Active', label: 'Tournament Pro' },
+  { id: 'R8_P7', rows: 8, players: 7, turnsPerPlayer: 5, status: 'Dormant', label: 'Brawl' },
+
+  // 9 Rows (45 circles, 44 playable)
+  { id: 'R9_P4', rows: 9, players: 4, turnsPerPlayer: 11, status: 'Dormant', label: 'Marathon' },
+  { id: 'R9_P11', rows: 9, players: 11, turnsPerPlayer: 4, status: 'Dormant', label: 'Mob' },
+
+  // 10 Rows (55 circles, 54 playable)
+  { id: 'R10_P6', rows: 10, players: 6, turnsPerPlayer: 9, status: 'Active', label: 'The Mountain' },
+  { id: 'R10_P9', rows: 10, players: 9, turnsPerPlayer: 6, status: 'Dormant', label: 'Chaos' }
+];
+
+// Lobby Filtering Logic prepared for future UI
+const filterConfigsByPlayers = (players: number) => BOARD_CONFIGS.filter(c => c.players === players);
+const filterConfigsByRows = (rows: number) => BOARD_CONFIGS.filter(c => c.rows === rows);
 
 export default function App() {
-  const [playerCount, setPlayerCount] = useState<2 | 3 | 4 | 5>(4);
+  const [playerCount, setPlayerCount] = useState<number>(4);
   
-  const activeConfigKey = useMemo(() => {
-    if (playerCount === 4) return '4P_Sprint';
-    if (playerCount === 5) return '5P_TournamentPro';
-    return null;
+  const activeConfig = useMemo(() => {
+    // Select the first 'Active' config for the current player count
+    return BOARD_CONFIGS.find(c => c.players === playerCount && c.status === 'Active') || 
+           BOARD_CONFIGS.find(c => c.players === playerCount);
   }, [playerCount]);
 
   const totalRows = useMemo(() => {
-    if (activeConfigKey) return BOARD_CONFIGS[activeConfigKey].rows;
-    return playerCount === 2 ? 6 : playerCount === 3 ? 7 : 8;
-  }, [playerCount, activeConfigKey]);
+    return activeConfig?.rows || 6;
+  }, [activeConfig]);
 
   const maxTurnsPerPlayer = useMemo(() => {
-    if (activeConfigKey) return BOARD_CONFIGS[activeConfigKey].turns;
-    // Default turns for others (calculated to fill board minus 1)
-    const totalCircles = (totalRows / 2) * (totalRows + 1);
-    return Math.floor((totalCircles - 1) / playerCount);
-  }, [playerCount, totalRows, activeConfigKey]);
+    return activeConfig?.turnsPerPlayer || 5;
+  }, [activeConfig]);
   const [hoveredCircle, setHoveredCircle] = useState<number | null>(null);
 
   const generateInitialBoard = (rows: number) => {
@@ -68,6 +86,7 @@ export default function App() {
   const [player3Counter, setPlayer3Counter] = useState(1);
   const [player4Counter, setPlayer4Counter] = useState(1);
   const [player5Counter, setPlayer5Counter] = useState(1);
+  const [player6Counter, setPlayer6Counter] = useState(1);
   const [gameStatus, setGameStatus] = useState<GameStatus>('playing');
   const [showStrategy, setShowStrategy] = useState(false);
 
@@ -90,15 +109,16 @@ export default function App() {
   };
 
   const scores = useMemo(() => {
-    if (gameStatus !== 'revealed') return { p1: 0, p2: 0, p3: 0, p4: 0, p5: 0 };
+    if (gameStatus !== 'revealed') return { p1: 0, p2: 0, p3: 0, p4: 0, p5: 0, p6: 0 };
     const blackHole = board.find(c => c.value === null);
-    if (!blackHole) return { p1: 0, p2: 0, p3: 0, p4: 0, p5: 0 };
+    if (!blackHole) return { p1: 0, p2: 0, p3: 0, p4: 0, p5: 0, p6: 0 };
     const neighborCoords = getNeighbors(blackHole.row, blackHole.col);
     let p1Sum = 0;
     let p2Sum = 0;
     let p3Sum = 0;
     let p4Sum = 0;
     let p5Sum = 0;
+    let p6Sum = 0;
     neighborCoords.forEach(([nr, nc]) => {
       const neighbor = board.find(c => c.row === nr && c.col === nc);
       if (neighbor && neighbor.value !== null) {
@@ -107,9 +127,10 @@ export default function App() {
         if (neighbor.claimedBy === 3) p3Sum += neighbor.value;
         if (neighbor.claimedBy === 4) p4Sum += neighbor.value;
         if (neighbor.claimedBy === 5) p5Sum += neighbor.value;
+        if (neighbor.claimedBy === 6) p6Sum += neighbor.value;
       }
     });
-    return { p1: p1Sum, p2: p2Sum, p3: p3Sum, p4: p4Sum, p5: p5Sum };
+    return { p1: p1Sum, p2: p2Sum, p3: p3Sum, p4: p4Sum, p5: p5Sum, p6: p6Sum };
   }, [board, gameStatus, totalRows]);
 
   const pulsingNeighbors = useMemo(() => {
@@ -141,7 +162,8 @@ export default function App() {
       currentPlayer === 1 ? player1Counter : 
       currentPlayer === 2 ? player2Counter : 
       currentPlayer === 3 ? player3Counter : 
-      currentPlayer === 4 ? player4Counter : player5Counter;
+      currentPlayer === 4 ? player4Counter : 
+      currentPlayer === 5 ? player5Counter : player6Counter;
       
     newBoard[index] = { ...newBoard[index], value: currentCounter, claimedBy: currentPlayer };
     setBoard(newBoard);
@@ -161,14 +183,17 @@ export default function App() {
     } else if (currentPlayer === 4) {
       setPlayer4Counter((prev) => prev + 1);
       setCurrentPlayer(playerCount === 5 ? 5 : 1);
-    } else {
+    } else if (currentPlayer === 5) {
       setPlayer5Counter((prev) => prev + 1);
+      setCurrentPlayer(playerCount === 6 ? 6 : 1);
+    } else {
+      setPlayer6Counter((prev) => prev + 1);
       setCurrentPlayer(1);
     }
   };
 
   const allPlayersReachedMax = (lastPlayer: number) => {
-    const counts = [player1Counter, player2Counter, player3Counter, player4Counter, player5Counter];
+    const counts = [player1Counter, player2Counter, player3Counter, player4Counter, player5Counter, player6Counter];
     return counts.slice(0, playerCount).every((c, i) => i + 1 === lastPlayer ? c >= maxTurnsPerPlayer : c > maxTurnsPerPlayer);
   };
 
@@ -182,15 +207,16 @@ export default function App() {
     setPlayer3Counter(1);
     setPlayer4Counter(1);
     setPlayer5Counter(1);
+    setPlayer6Counter(1);
     setGameStatus('playing');
   };
 
   const cyclePlayerCount = () => {
-    const nextCount = playerCount === 2 ? 3 : playerCount === 3 ? 4 : playerCount === 4 ? 5 : 2;
-    let nextRows;
-    if (nextCount === 4) nextRows = BOARD_CONFIGS['4P_Sprint'].rows;
-    else if (nextCount === 5) nextRows = BOARD_CONFIGS['5P_TournamentPro'].rows;
-    else nextRows = nextCount === 2 ? 6 : 7;
+    const nextCount = playerCount === 2 ? 3 : playerCount === 3 ? 4 : playerCount === 4 ? 5 : playerCount === 5 ? 6 : 2;
+    const nextConfig = BOARD_CONFIGS.find(c => c.players === nextCount && c.status === 'Active') || 
+                      BOARD_CONFIGS.find(c => c.players === nextCount);
+    
+    const nextRows = nextConfig?.rows || 6;
     
     setPlayerCount(nextCount);
     setBoard(generateInitialBoard(nextRows));
@@ -200,6 +226,7 @@ export default function App() {
     setPlayer3Counter(1);
     setPlayer4Counter(1);
     setPlayer5Counter(1);
+    setPlayer6Counter(1);
     setGameStatus('playing');
   };
 
@@ -215,7 +242,8 @@ export default function App() {
     playerCount === 2 ? [scores.p1, scores.p2] : 
     playerCount === 3 ? [scores.p1, scores.p2, scores.p3] : 
     playerCount === 4 ? [scores.p1, scores.p2, scores.p3, scores.p4] :
-    [scores.p1, scores.p2, scores.p3, scores.p4, scores.p5];
+    playerCount === 5 ? [scores.p1, scores.p2, scores.p3, scores.p4, scores.p5] :
+    [scores.p1, scores.p2, scores.p3, scores.p4, scores.p5, scores.p6];
     
   const minScore = Math.min(...scoresList);
   const winners = [];
@@ -223,7 +251,8 @@ export default function App() {
   if (scores.p2 === minScore) winners.push(2);
   if (playerCount >= 3 && scores.p3 === minScore) winners.push(3);
   if (playerCount >= 4 && scores.p4 === minScore) winners.push(4);
-  if (playerCount === 5 && scores.p5 === minScore) winners.push(5);
+  if (playerCount >= 5 && scores.p5 === minScore) winners.push(5);
+  if (playerCount === 6 && scores.p6 === minScore) winners.push(6);
 
   const winner = winners.length === 1 ? winners[0] : 0;
   const isDraw = gameStatus === 'revealed' && winners.length > 1;
@@ -320,7 +349,8 @@ export default function App() {
               currentPlayer === 1 ? player1Counter : 
               currentPlayer === 2 ? player2Counter : 
               currentPlayer === 3 ? player3Counter : 
-              currentPlayer === 4 ? player4Counter : player5Counter
+              currentPlayer === 4 ? player4Counter : 
+              currentPlayer === 5 ? player5Counter : player6Counter
             } 
             gameStatus={gameStatus}
           />
@@ -330,17 +360,17 @@ export default function App() {
         <div className="flex-1 flex items-center justify-end gap-1 sm:gap-4 h-full">
           <div className="flex items-center gap-1 relative z-10">
             <div className="hidden lg:flex items-center gap-2 bg-white/5 p-1 rounded-xl border border-white/10 mr-4">
-              {[2, 3, 4, 5].map((count) => (
+              {[2, 3, 4, 5, 6].map((count) => (
                 <button 
                   key={count}
                   onClick={() => {
                     if (playerCount !== count) {
-                      let nextRows;
-                      if (count === 4) nextRows = BOARD_CONFIGS['4P_Sprint'].rows;
-                      else if (count === 5) nextRows = BOARD_CONFIGS['5P_TournamentPro'].rows;
-                      else nextRows = count === 2 ? 6 : 7;
+                      const nextConfig = BOARD_CONFIGS.find(c => c.players === count && c.status === 'Active') || 
+                                        BOARD_CONFIGS.find(c => c.players === count);
 
-                      setPlayerCount(count as 2|3|4|5);
+                      const nextRows = nextConfig?.rows || 6;
+
+                      setPlayerCount(count);
                       setBoard(generateInitialBoard(nextRows));
                       setCurrentPlayer(1);
                       setPlayer1Counter(1);
@@ -348,6 +378,7 @@ export default function App() {
                       setPlayer3Counter(1);
                       setPlayer4Counter(1);
                       setPlayer5Counter(1);
+                      setPlayer6Counter(1);
                       setGameStatus('playing');
                     }
                   }}
@@ -417,7 +448,8 @@ export default function App() {
                   currentPlayer === 1 ? 'bg-blue-500' : 
                   currentPlayer === 2 ? 'bg-red-500' : 
                   currentPlayer === 3 ? 'bg-emerald-500' : 
-                  currentPlayer === 4 ? 'bg-purple-500' : 'bg-amber-500'
+                  currentPlayer === 4 ? 'bg-purple-500' : 
+                  currentPlayer === 5 ? 'bg-amber-500' : 'bg-blue-400'
                 } animate-pulse`} />
                 <span className="text-[7px] font-black uppercase italic opacity-60">P{currentPlayer}</span>
              </div>
@@ -459,7 +491,7 @@ export default function App() {
                 <div className="space-y-3">
                   <h3 className="text-[8px] font-black uppercase tracking-[0.2em] opacity-25">Tournament Tally</h3>
                   <div className="grid gap-2">
-                    {[1, 2, 3, 4, 5].filter(p => p <= playerCount).map(p => (
+                    {[1, 2, 3, 4, 5, 6].filter(p => p <= playerCount).map(p => (
                       <div 
                         key={p} 
                         className={`flex items-center justify-between p-3 rounded-xl border transition-all duration-300 ${winners.includes(p) ? 'bg-white/10 border-white/20' : 'bg-white/[0.02] border-white/5 opacity-40 grayscale'}`}
@@ -469,7 +501,8 @@ export default function App() {
                             p === 1 ? 'bg-blue-500' : 
                             p === 2 ? 'bg-red-500' : 
                             p === 3 ? 'bg-emerald-500' : 
-                            p === 4 ? 'bg-purple-500' : 'bg-amber-500'
+                            p === 4 ? 'bg-purple-500' : 
+                            p === 5 ? 'bg-amber-500' : 'bg-blue-400'
                           } ${winners.includes(p) ? 'shadow-[0_0_10px_currentColor]' : ''}`} />
                           <span className="text-[10px] font-black tracking-wider opacity-60">PLAYER {p}</span>
                         </div>
@@ -610,13 +643,14 @@ export default function App() {
                 {/* RIGHT WING - STANDINGS BADGE (Square Badge) */}
                 <div className="pointer-events-auto bg-gray-800/80 backdrop-blur-xl border border-white/10 rounded-2xl p-2.5 shadow-2xl w-[90px] sm:w-[110px] shrink-0">
                   <div className="grid grid-cols-2 gap-x-1.5 gap-y-1">
-                    {[1, 2, 3, 4, 5].filter(p => p <= playerCount).map(p => (
+                    {[1, 2, 3, 4, 5, 6].filter(p => p <= playerCount).map(p => (
                       <div key={p} className="flex items-center gap-1">
                          <div className={`w-1.5 h-1.5 rounded-full ${
                            p === 1 ? 'bg-blue-500' : 
                            p === 2 ? 'bg-red-500' : 
                            p === 3 ? 'bg-emerald-500' : 
-                           p === 4 ? 'bg-purple-500' : 'bg-amber-500'
+                           p === 4 ? 'bg-purple-500' : 
+                           p === 5 ? 'bg-amber-500' : 'bg-blue-400'
                          } ${winners.includes(p) ? 'shadow-[0_0_8px_currentColor]' : 'opacity-20'}`} />
                          <span className={`text-[10px] font-black leading-none ${winners.includes(p) ? 'text-white' : 'text-white/20'}`}>
                            {scores[`p${p}` as keyof typeof scores]}
@@ -769,6 +803,7 @@ export default function App() {
                             ${circle.claimedBy === 3 ? 'bg-emerald-600 shadow-[0_5px_25px_rgba(16,185,129,0.4)] border-2 border-emerald-400' : ''}
                             ${circle.claimedBy === 4 ? 'bg-purple-600 shadow-[0_5px_25px_rgba(147,51,234,0.4)] border-2 border-purple-400' : ''}
                             ${circle.claimedBy === 5 ? 'bg-amber-500 shadow-[0_5px_30px_rgba(245,158,11,0.6)] border-2 border-amber-300' : ''}
+                            ${circle.claimedBy === 6 ? 'bg-blue-400 shadow-[0_5px_30px_rgba(96,165,250,0.6)] border-2 border-blue-200' : ''}
                             ${!circle.value && gameStatus === 'playing' ? 'bg-white/5 border border-white/10 hover:bg-white/20 active:bg-white/30 cursor-pointer shadow-inner' : ''}
                             ${circle.value === null && gameStatus !== 'playing' ? 'bg-gradient-to-br from-black via-gray-900 to-black border-2 border-dashed border-white/40 shadow-[0_0_70px_rgba(255,255,255,0.2)] pulse-ring' : ''}
                             ${!circle.value && gameStatus !== 'playing' && circle.value !== null ? 'grayscale' : ''}
