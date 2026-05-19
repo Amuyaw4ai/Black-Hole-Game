@@ -11,9 +11,39 @@ interface CircleState {
 
 type GameStatus = 'playing' | 'finished' | 'revealed';
 
+interface BoardConfig {
+  rows: number;
+  turns: number;
+}
+
+const BOARD_CONFIGS: Record<string, BoardConfig> = {
+  '4P_Sprint': { rows: 6, turns: 5 },
+  '4P_Marathon': { rows: 9, turns: 11 },
+  '5P_TournamentPro': { rows: 8, turns: 7 },
+  '9P_Sprint': { rows: 7, turns: 3 },
+  '9P_Marathon': { rows: 10, turns: 6 },
+};
+
 export default function App() {
-  const [playerCount, setPlayerCount] = useState<2 | 3 | 4 | 5>(2);
-  const totalRows = playerCount === 2 ? 6 : playerCount === 3 ? 7 : playerCount === 4 ? 9 : 8;
+  const [playerCount, setPlayerCount] = useState<2 | 3 | 4 | 5>(4);
+  
+  const activeConfigKey = useMemo(() => {
+    if (playerCount === 4) return '4P_Sprint';
+    if (playerCount === 5) return '5P_TournamentPro';
+    return null;
+  }, [playerCount]);
+
+  const totalRows = useMemo(() => {
+    if (activeConfigKey) return BOARD_CONFIGS[activeConfigKey].rows;
+    return playerCount === 2 ? 6 : playerCount === 3 ? 7 : 8;
+  }, [playerCount, activeConfigKey]);
+
+  const maxTurnsPerPlayer = useMemo(() => {
+    if (activeConfigKey) return BOARD_CONFIGS[activeConfigKey].turns;
+    // Default turns for others (calculated to fill board minus 1)
+    const totalCircles = (totalRows / 2) * (totalRows + 1);
+    return Math.floor((totalCircles - 1) / playerCount);
+  }, [playerCount, totalRows, activeConfigKey]);
   const [hoveredCircle, setHoveredCircle] = useState<number | null>(null);
 
   const generateInitialBoard = (rows: number) => {
@@ -118,6 +148,9 @@ export default function App() {
     
     if (currentPlayer === 1) {
       setPlayer1Counter((prev) => prev + 1);
+      if (player1Counter >= maxTurnsPerPlayer && allPlayersReachedMax(1)) {
+        // This shouldn't happen if turn logic is correct, but safety
+      }
       setCurrentPlayer(2);
     } else if (currentPlayer === 2) {
       setPlayer2Counter((prev) => prev + 1);
@@ -132,6 +165,11 @@ export default function App() {
       setPlayer5Counter((prev) => prev + 1);
       setCurrentPlayer(1);
     }
+  };
+
+  const allPlayersReachedMax = (lastPlayer: number) => {
+    const counts = [player1Counter, player2Counter, player3Counter, player4Counter, player5Counter];
+    return counts.slice(0, playerCount).every((c, i) => i + 1 === lastPlayer ? c >= maxTurnsPerPlayer : c > maxTurnsPerPlayer);
   };
 
   const revealScores = () => setGameStatus('revealed');
@@ -149,7 +187,11 @@ export default function App() {
 
   const cyclePlayerCount = () => {
     const nextCount = playerCount === 2 ? 3 : playerCount === 3 ? 4 : playerCount === 4 ? 5 : 2;
-    const nextRows = nextCount === 2 ? 6 : nextCount === 3 ? 7 : nextCount === 4 ? 9 : 8;
+    let nextRows;
+    if (nextCount === 4) nextRows = BOARD_CONFIGS['4P_Sprint'].rows;
+    else if (nextCount === 5) nextRows = BOARD_CONFIGS['5P_TournamentPro'].rows;
+    else nextRows = nextCount === 2 ? 6 : 7;
+    
     setPlayerCount(nextCount);
     setBoard(generateInitialBoard(nextRows));
     setCurrentPlayer(1);
@@ -239,8 +281,12 @@ export default function App() {
     
     // Take the smaller of the two to guarantee fit, but allow up to 80px (w-20) on desktop
     const calculated = Math.floor(Math.min(sizeFromHeight, sizeFromWidth));
-    return Math.max(16, Math.min(containerWidth > 1024 ? 80 : 64, calculated));
-  }, [containerHeight, containerWidth, totalRows, gameStatus]);
+    const baseLimit = containerWidth > 1024 ? 80 : 64;
+    // Scale up for 4P Knife Fight (6 rows)
+    const upperLimit = (playerCount === 4 && totalRows === 6) ? (containerWidth > 1024 ? 96 : 80) : baseLimit;
+    
+    return Math.max(16, Math.min(upperLimit, calculated));
+  }, [containerHeight, containerWidth, totalRows, gameStatus, playerCount]);
 
   return (
     <div 
@@ -289,7 +335,11 @@ export default function App() {
                   key={count}
                   onClick={() => {
                     if (playerCount !== count) {
-                      const nextRows = count === 2 ? 6 : count === 3 ? 7 : count === 4 ? 9 : 8;
+                      let nextRows;
+                      if (count === 4) nextRows = BOARD_CONFIGS['4P_Sprint'].rows;
+                      else if (count === 5) nextRows = BOARD_CONFIGS['5P_TournamentPro'].rows;
+                      else nextRows = count === 2 ? 6 : 7;
+
                       setPlayerCount(count as 2|3|4|5);
                       setBoard(generateInitialBoard(nextRows));
                       setCurrentPlayer(1);
@@ -320,15 +370,6 @@ export default function App() {
               </div>
 
               <div className="w-px h-4 bg-white/10 mx-0.5" />
-
-              <button 
-                onClick={resetGame}
-                className="p-1.5 sm:p-2 bg-white/10 hover:bg-white/20 border border-white/10 rounded-full transition-all active:scale-90"
-                id="reset-top"
-                title="Reset Game"
-              >
-                <RotateCcw size={12} className="sm:w-3.5 sm:h-3.5" />
-              </button>
             </div>
 
           <div className="flex items-center gap-1.5 ml-2">
@@ -524,38 +565,60 @@ export default function App() {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -30 }}
                 transition={{ type: "spring", damping: 20, stiffness: 100 }}
-                className="absolute top-4 sm:top-12 left-2 right-2 z-40 flex items-start justify-between pointer-events-none lg:hidden"
+                className="absolute top-4 sm:top-6 left-2 right-2 z-40 flex items-center justify-center gap-x-4 pointer-events-none lg:hidden"
               >
                 {/* LEFT WING - THE VICTOR */}
                 <div className={`
-                  pointer-events-auto flex items-center gap-2 px-4 py-3 rounded-2xl border-2 transition-all shadow-[0_20px_60px_rgba(0,0,0,0.6)]
+                  pointer-events-auto flex items-center gap-2 px-4 py-3 rounded-2xl border-2 transition-all shadow-[0_20px_60px_rgba(0,0,0,0.6)] shrink-0
                   ${isDraw ? 'bg-gray-800 border-white/20 text-white' : 'bg-white border-blue-600 text-black shadow-blue-500/40'}
                 `}>
                   {!isDraw && <Trophy size={18} className="text-blue-600 fill-blue-600/10" />}
                   <div className="flex flex-col leading-none">
                     <span className="text-xs sm:text-sm font-black italic tracking-tight uppercase">
-                      {isDraw ? "SUDDEN DRAW" : `P${winner} VICTOR`}
+                      {isDraw ? "DRAW" : `P${winner}`}
                     </span>
-                    {!isDraw && <span className="text-[8px] font-black opacity-60 uppercase tracking-widest mt-1">BEST SUM: {minScore}</span>}
                   </div>
                 </div>
 
+                {/* CENTRAL ACTION HUB - PLAY AGAIN */}
+                <motion.button
+                  onClick={resetGame}
+                  initial={{ scale: 0.8, opacity: 0 }}
+                  animate={{ 
+                    scale: [1, 1.05, 1],
+                    opacity: 1
+                  }}
+                  whileTap={{ scale: 0.9 }}
+                  transition={{
+                    scale: { repeat: Infinity, duration: 2, ease: "easeInOut" },
+                    opacity: { duration: 0.3 }
+                  }}
+                  className={`
+                    pointer-events-auto w-12 h-12 sm:w-14 sm:h-14 rounded-2xl flex items-center justify-center transition-all shadow-lg border-2 z-50
+                    ${isDraw ? 'bg-white text-black border-white' : 
+                      winner === 1 ? 'bg-blue-600 border-blue-400 shadow-blue-500/50' :
+                      winner === 2 ? 'bg-red-600 border-red-400 shadow-red-500/50' :
+                      winner === 3 ? 'bg-emerald-600 border-emerald-400 shadow-emerald-500/50' :
+                      winner === 4 ? 'bg-purple-600 border-purple-400 shadow-purple-500/50' :
+                      'bg-amber-500 border-amber-400 shadow-amber-500/50'}
+                  `}
+                  title="Play Again"
+                >
+                  <RotateCcw size={20} className="text-white fill-white/10" />
+                </motion.button>
+
                 {/* RIGHT WING - STANDINGS BADGE (Square Badge) */}
-                <div className="pointer-events-auto bg-gray-800/80 backdrop-blur-xl border border-white/10 rounded-2xl p-3 shadow-2xl w-[100px] sm:w-[120px]">
-                  <h4 className="text-[7px] font-black uppercase tracking-widest opacity-30 mb-2 border-b border-white/5 pb-1">Standings</h4>
-                  <div className="grid grid-cols-2 gap-x-2 gap-y-1.5">
+                <div className="pointer-events-auto bg-gray-800/80 backdrop-blur-xl border border-white/10 rounded-2xl p-2.5 shadow-2xl w-[90px] sm:w-[110px] shrink-0">
+                  <div className="grid grid-cols-2 gap-x-1.5 gap-y-1">
                     {[1, 2, 3, 4, 5].filter(p => p <= playerCount).map(p => (
-                      <div key={p} className="flex flex-col gap-0.5">
-                         <div className="flex items-center gap-1">
-                           <div className={`w-1.5 h-1.5 rounded-full ${
-                             p === 1 ? 'bg-blue-500' : 
-                             p === 2 ? 'bg-red-500' : 
-                             p === 3 ? 'bg-emerald-500' : 
-                             p === 4 ? 'bg-purple-500' : 'bg-amber-500'
-                           } ${winners.includes(p) ? 'shadow-[0_0_8px_currentColor]' : 'opacity-20'}`} />
-                           <span className={`text-[8px] font-black uppercase tracking-tighter ${winners.includes(p) ? 'text-white' : 'text-white/30'}`}>P{p}</span>
-                         </div>
-                         <span className={`text-[10px] sm:text-xs font-black italic leading-none ml-2.5 ${winners.includes(p) ? 'text-white' : 'text-white/20'}`}>
+                      <div key={p} className="flex items-center gap-1">
+                         <div className={`w-1.5 h-1.5 rounded-full ${
+                           p === 1 ? 'bg-blue-500' : 
+                           p === 2 ? 'bg-red-500' : 
+                           p === 3 ? 'bg-emerald-500' : 
+                           p === 4 ? 'bg-purple-500' : 'bg-amber-500'
+                         } ${winners.includes(p) ? 'shadow-[0_0_8px_currentColor]' : 'opacity-20'}`} />
+                         <span className={`text-[10px] font-black leading-none ${winners.includes(p) ? 'text-white' : 'text-white/20'}`}>
                            {scores[`p${p}` as keyof typeof scores]}
                          </span>
                       </div>
