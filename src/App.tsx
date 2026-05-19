@@ -6,7 +6,7 @@ interface CircleState {
   row: number;
   col: number;
   value: number | null;
-  claimedBy: 1 | 2 | 3 | 4 | 5 | null;
+  claimedBy: number | null;
 }
 
 type GameStatus = 'playing' | 'finished' | 'revealed';
@@ -43,9 +43,6 @@ const BOARD_CONFIGS: BoardConfig[] = [
 ];
 
 // Lobby Filtering Logic prepared for future UI
-const filterConfigsByPlayers = (players: number) => BOARD_CONFIGS.filter(c => c.players === players);
-const filterConfigsByRows = (rows: number) => BOARD_CONFIGS.filter(c => c.rows === rows);
-
 export default function App() {
   const [playerCount, setPlayerCount] = useState<number>(4);
   
@@ -80,7 +77,7 @@ export default function App() {
   };
 
   const [board, setBoard] = useState<CircleState[]>(() => generateInitialBoard(6));
-  const [currentPlayer, setCurrentPlayer] = useState<1 | 2 | 3 | 4 | 5>(1);
+  const [currentPlayer, setCurrentPlayer] = useState<number>(1);
   const [player1Counter, setPlayer1Counter] = useState(1);
   const [player2Counter, setPlayer2Counter] = useState(1);
   const [player3Counter, setPlayer3Counter] = useState(1);
@@ -89,6 +86,7 @@ export default function App() {
   const [player6Counter, setPlayer6Counter] = useState(1);
   const [gameStatus, setGameStatus] = useState<GameStatus>('playing');
   const [showStrategy, setShowStrategy] = useState(false);
+  const [isFormatModalOpen, setIsFormatModalOpen] = useState(false);
 
   const emptyCirclesCount = board.filter((c) => c.value === null).length;
   const isGameOver = emptyCirclesCount === 1;
@@ -182,10 +180,10 @@ export default function App() {
       setCurrentPlayer(playerCount >= 4 ? 4 : 1);
     } else if (currentPlayer === 4) {
       setPlayer4Counter((prev) => prev + 1);
-      setCurrentPlayer(playerCount === 5 ? 5 : 1);
+      setCurrentPlayer(playerCount >= 5 ? 5 : 1);
     } else if (currentPlayer === 5) {
       setPlayer5Counter((prev) => prev + 1);
-      setCurrentPlayer(playerCount === 6 ? 6 : 1);
+      setCurrentPlayer(playerCount >= 6 ? 6 : 1);
     } else {
       setPlayer6Counter((prev) => prev + 1);
       setCurrentPlayer(1);
@@ -211,15 +209,9 @@ export default function App() {
     setGameStatus('playing');
   };
 
-  const cyclePlayerCount = () => {
-    const nextCount = playerCount === 2 ? 3 : playerCount === 3 ? 4 : playerCount === 4 ? 5 : playerCount === 5 ? 6 : 2;
-    const nextConfig = BOARD_CONFIGS.find(c => c.players === nextCount && c.status === 'Active') || 
-                      BOARD_CONFIGS.find(c => c.players === nextCount);
-    
-    const nextRows = nextConfig?.rows || 6;
-    
-    setPlayerCount(nextCount);
-    setBoard(generateInitialBoard(nextRows));
+  const selectConfig = (config: BoardConfig) => {
+    setPlayerCount(config.players);
+    setBoard(generateInitialBoard(config.rows));
     setCurrentPlayer(1);
     setPlayer1Counter(1);
     setPlayer2Counter(1);
@@ -228,6 +220,7 @@ export default function App() {
     setPlayer5Counter(1);
     setPlayer6Counter(1);
     setGameStatus('playing');
+    setIsFormatModalOpen(false);
   };
 
   const rows = useMemo(() => {
@@ -275,18 +268,6 @@ export default function App() {
     observer.observe(containerRef.current);
     return () => observer.disconnect();
   }, []);
-
-  const [isMorphing, setIsMorphing] = useState(false);
-
-  useEffect(() => {
-    // TRIGGER: Future-proofed morphing (Only for 6P+ on mobile portrait)
-    const isMobilePortrait = containerWidth < 640 && containerWidth < containerHeight;
-    if (playerCount >= 6 && isMobilePortrait) {
-      setIsMorphing(true);
-      const timer = setTimeout(() => setIsMorphing(false), 400);
-      return () => clearTimeout(timer);
-    }
-  }, [playerCount, gameStatus, containerWidth]); // Properly reactive to containerWidth
 
   const circleSize = useMemo(() => {
     if (containerHeight === 0 || containerWidth === 0) return 60;
@@ -336,7 +317,7 @@ export default function App() {
         <div className="flex-1 flex items-center gap-2 sm:gap-3">
           <div className="hidden sm:block">
             <h1 className="text-xl lg:text-2xl font-black italic tracking-tight uppercase leading-none bg-gradient-to-br from-white to-white/40 bg-clip-text text-transparent">Black Hole</h1>
-            <p className="text-[7px] uppercase tracking-[0.8em] font-bold opacity-30 mt-1">V2.4 - TOURNAMENT PRO</p>
+            <p className="text-[7px] uppercase tracking-[0.8em] font-bold opacity-30 mt-1">V3.0 - FLEXIBLE MATRIX</p>
           </div>
           <div className="sm:hidden w-7 h-7 bg-white/10 rounded-lg flex items-center justify-center font-black italic text-[10px]">BH</div>
         </div>
@@ -357,43 +338,23 @@ export default function App() {
         </div>
 
         {/* RIGHT: CONTROLS */}
-        <div className="flex-1 flex items-center justify-end gap-1 sm:gap-4 h-full">
-          <div className="flex items-center gap-1 relative z-10">
-            <div className="hidden lg:flex items-center gap-2 bg-white/5 p-1 rounded-xl border border-white/10 mr-4">
-              {[2, 3, 4, 5, 6].map((count) => (
-                <button 
-                  key={count}
-                  onClick={() => {
-                    if (playerCount !== count) {
-                      const nextConfig = BOARD_CONFIGS.find(c => c.players === count && c.status === 'Active') || 
-                                        BOARD_CONFIGS.find(c => c.players === count);
-
-                      const nextRows = nextConfig?.rows || 6;
-
-                      setPlayerCount(count);
-                      setBoard(generateInitialBoard(nextRows));
-                      setCurrentPlayer(1);
-                      setPlayer1Counter(1);
-                      setPlayer2Counter(1);
-                      setPlayer3Counter(1);
-                      setPlayer4Counter(1);
-                      setPlayer5Counter(1);
-                      setPlayer6Counter(1);
-                      setGameStatus('playing');
-                    }
-                  }}
-                  className={`px-2 py-1 rounded-lg text-[8px] font-black uppercase tracking-widest transition-all duration-300 ${playerCount === count ? 'bg-white text-black ring-2 ring-white/50' : 'text-white/40 hover:bg-white/5'}`}
-                >
-                  {count}P
-                </button>
-              ))}
+        <div className="flex-1 flex items-center justify-end gap-1 sm:gap-4 h-full relative z-10 md:justify-between md:flex-wrap md:gap-4">
+          <div className="flex items-center gap-1">
+            <div className="hidden md:flex items-center mr-4">
+              <button 
+                onClick={() => setIsFormatModalOpen(true)}
+                className="flex items-center gap-2 px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl transition-all active:scale-95 group shrink-0"
+              >
+                <Users size={14} className="text-white/40 group-hover:text-white transition-colors" />
+                <span className="text-[10px] font-black uppercase tracking-widest text-white/60 group-hover:text-white whitespace-nowrap">Format: {activeConfig?.label || 'Custom'}</span>
+              </button>
             </div>
               
-              <div className="sm:hidden flex items-center px-1">
+              <div className="md:hidden flex items-center px-1">
                  <button 
-                  onClick={cyclePlayerCount}
+                  onClick={() => setIsFormatModalOpen(true)}
                   className="p-1.5 hover:bg-white/10 rounded-full text-white/40 transition-all active:scale-95 flex items-center gap-1"
-                  title="Cycle Players"
+                  title="Format Selection"
                 >
                   <Users size={12} />
                   <span className="text-[9px] font-black">{playerCount}P</span>
@@ -575,7 +536,7 @@ export default function App() {
            </div>
            <div className="mt-auto flex flex-col gap-2">
               <button 
-                onClick={cyclePlayerCount}
+                onClick={() => setIsFormatModalOpen(true)}
                 className="w-full py-2 bg-white/5 text-white/40 border border-white/5 rounded-lg text-[8px] font-black uppercase tracking-widest"
               >
                 Switch Player Mode
@@ -667,195 +628,113 @@ export default function App() {
             ref={containerRef}
             className="flex-1 w-full h-full max-h-[85vh] flex items-center justify-center overflow-hidden pt-12 sm:pt-0 relative"
           >
-            {/* Pyramid Scaling logic: Dynamic engine based on parent pixel height */}
-            {(playerCount as number) >= 6 && containerWidth < 640 && (containerWidth < containerHeight) ? (
-              /* HYBRID ROUTER: FUTURE MORPH (LEFT JUSTIFIED + MORPH INTRO) */
-              <div 
-                className="flex flex-col items-start gap-1 p-6 relative"
-                style={{ 
-                  width: 'fit-content',
-                  maxHeight: '75%',
-                  willChange: 'transform'
-                }}
+            {/* Symmetrical Pascal Architecture with Convergence Entry */}
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={activeConfig?.id || 'default'}
+                initial={{ scale: 1.05, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                transition={{ duration: 0.5, ease: "easeOut" }}
+                className="flex items-center justify-center w-full h-full"
               >
-                {rows.map((row, rIdx) => (
-                  <div key={rIdx} className="flex gap-1 relative z-10">
-                    {row.map((circle) => {
-                      const bIdx = board.findIndex(c => c.row === circle.row && c.col === circle.col);
-                      const isPulsing = pulsingNeighbors.includes(bIdx);
-                      const isScoring = scoringCircles.includes(bIdx);
-                      const isBlackHole = circle.value === null;
-                      
-                      const playerColor = 
-                        currentPlayer === 1 ? 'rgba(37,99,235,1)' : 
-                        currentPlayer === 2 ? 'rgba(239,68,68,1)' : 
-                        currentPlayer === 3 ? 'rgba(16,185,129,1)' : 
-                        currentPlayer === 4 ? 'rgba(147,51,234,1)' : 'rgba(245,158,11,1)';
+                <div 
+                  className="flex flex-col items-center relative z-10 transition-all duration-500 max-w-full"
+                  style={{ gap: `${containerWidth < 1024 ? (containerWidth < 640 ? 4 : 8) : 16}px` }}
+                >
+                  {rows.map((row, rowIndex) => (
+                    <div key={rowIndex} className="flex touch-none" style={{ gap: `${containerWidth < 1024 ? (containerWidth < 640 ? 4 : 8) : 16}px` }}>
+                      {row.map((circle) => {
+                        const boardIndex = board.findIndex(c => c.row === circle.row && c.col === circle.col);
+                        const isBlackHole = circle.value === null;
+                        const isPulsing = pulsingNeighbors.includes(boardIndex);
+                        const isScoring = scoringCircles.includes(boardIndex);
 
-                      // GRAVITATIONAL SHEAR PHYSICS
-                      const shearSpacing = 36; 
-                      const maxRowLen = rows[rows.length - 1].length;
-                      
-                      const pascalX = ((maxRowLen * shearSpacing) / 2) - (((rIdx + 1) * shearSpacing) / 2);
-                      const targetX = 0;
-                      
-                      return (
-                        <motion.button
-                          key={`${circle.row}-${circle.col}`}
-                          id={`circle-${circle.row}-${circle.col}`}
-                          initial={{ x: pascalX, opacity: 0 }}
-                          animate={{ 
-                            x: isMorphing ? pascalX : targetX,
-                            opacity: gameStatus !== 'playing' && !isScoring ? 0.2 : 1,
-                            scale: isScoring ? [1, 1.05, 1] : 1,
-                          }}
-                          transition={{ 
-                            x: {
-                              duration: 0.4,
-                              ease: [0.175, 0.885, 0.32, 1.275],
-                              delay: isMorphing ? 0 : rIdx * 0.01
-                            },
-                            scale: isScoring ? { repeat: Infinity, duration: 2, ease: "easeInOut" } : { duration: 0.3 }
-                          }}
-                          onMouseEnter={() => setHoveredCircle(bIdx)}
-                          onMouseLeave={() => setHoveredCircle(null)}
-                          onTouchStart={() => setHoveredCircle(bIdx)}
-                          onTouchEnd={() => setHoveredCircle(null)}
-                          whileTap={!circle.value && gameStatus === 'playing' ? { scale: 0.85 } : {}}
-                          onClick={() => handleCircleClick(bIdx)}
-                          disabled={circle.value !== null || gameStatus !== 'playing'}
-                          className={`
-                            w-8 h-8 rounded-full flex items-center justify-center font-black transition-all duration-300 relative touch-manipulation will-change-transform
-                            ${circle.claimedBy === 1 ? 'bg-blue-600 shadow-[0_0_15px_rgba(37,99,235,0.4)] border border-blue-400' : ''}
-                            ${circle.claimedBy === 2 ? 'bg-red-600 shadow-[0_0_15px_rgba(239,68,68,0.4)] border border-red-400' : ''}
-                            ${circle.claimedBy === 3 ? 'bg-emerald-600 shadow-[0_0_15px_rgba(16,185,129,0.4)] border border-emerald-400' : ''}
-                            ${circle.claimedBy === 4 ? 'bg-purple-600 shadow-[0_0_15px_rgba(147,51,234,0.4)] border border-purple-400' : ''}
-                            ${circle.claimedBy === 5 ? 'bg-amber-500 shadow-[0_0_20px_rgba(245,158,11,0.6)] border border-amber-300' : ''}
-                            ${!circle.value && gameStatus === 'playing' ? 'bg-white/10 border border-white/5 opacity-80 hover:bg-white/20' : ''}
-                            ${isBlackHole && gameStatus !== 'playing' ? 'bg-gradient-to-br from-black via-gray-900 to-black border-2 border-dashed border-white/40 shadow-[0_0_70px_rgba(255,255,255,0.2)] pulse-ring' : ''}
-                            ${!circle.value && gameStatus !== 'playing' && !isBlackHole ? 'grayscale' : ''}
-                            ${isPulsing ? 'scale-110 z-20' : ''}
-                            ${isScoring ? 'border-2 border-blue-500 shadow-[0_0_30px_rgba(30,144,255,1)] z-30 transition-none' : ''}
-                          `}
-                        >
-                          {/* LONG-PRESS PULSE: 15% Opacity Halo */}
-                          <AnimatePresence>
-                            {isPulsing && (
+                        const playerColor = 
+                          currentPlayer === 1 ? 'rgba(37,99,235,1)' : 
+                          currentPlayer === 2 ? 'rgba(239,68,68,1)' : 
+                          currentPlayer === 3 ? 'rgba(16,185,129,1)' : 
+                          currentPlayer === 4 ? 'rgba(147,51,234,1)' : 'rgba(245,158,11,1)';
+                        
+                        return (
+                          <motion.button
+                            key={`${circle.row}-${circle.col}`}
+                            id={`circle-${circle.row}-${circle.col}`}
+                            animate={{
+                              opacity: gameStatus !== 'playing' && !isScoring ? 0.2 : 1,
+                              scale: isScoring ? [1, 1.05, 1] : 1,
+                            }}
+                            transition={{
+                              scale: isScoring ? { repeat: Infinity, duration: 2, ease: "easeInOut" } : { duration: 0.3 }
+                            }}
+                            onMouseEnter={() => setHoveredCircle(boardIndex)}
+                            onMouseLeave={() => setHoveredCircle(null)}
+                            onTouchStart={() => setHoveredCircle(boardIndex)}
+                            onTouchEnd={() => setHoveredCircle(null)}
+                            whileHover={!circle.value && gameStatus === 'playing' ? { scale: 1.15 } : {}}
+                            whileTap={!circle.value && gameStatus === 'playing' ? { scale: 0.9 } : {}}
+                            onClick={() => handleCircleClick(boardIndex)}
+                            disabled={circle.value !== null || gameStatus !== 'playing'}
+                            className={`
+                              compact-circle rounded-full flex items-center justify-center font-black transition-all duration-300 relative touch-manipulation will-change-transform
+                              ${circle.claimedBy === 1 ? 'bg-blue-600 shadow-[0_5px_25px_rgba(37,99,235,0.4)] border-2 border-blue-400' : ''}
+                              ${circle.claimedBy === 2 ? 'bg-red-600 shadow-[0_5px_25px_rgba(239,68,68,0.4)] border-2 border-red-400' : ''}
+                              ${circle.claimedBy === 3 ? 'bg-emerald-600 shadow-[0_5px_25px_rgba(16,185,129,0.4)] border-2 border-emerald-400' : ''}
+                              ${circle.claimedBy === 4 ? 'bg-purple-600 shadow-[0_5px_25px_rgba(147,51,234,0.4)] border-2 border-purple-400' : ''}
+                              ${circle.claimedBy === 5 ? 'bg-amber-500 shadow-[0_5px_30px_rgba(245,158,11,0.6)] border-2 border-amber-300' : ''}
+                              ${circle.claimedBy === 6 ? 'bg-blue-400 shadow-[0_5px_30px_rgba(96,165,250,0.6)] border-2 border-blue-200' : ''}
+                              ${!circle.value && gameStatus === 'playing' ? 'bg-white/5 border border-white/10 hover:bg-white/20 active:bg-white/30 cursor-pointer shadow-inner' : ''}
+                              ${circle.value === null && gameStatus !== 'playing' ? 'bg-gradient-to-br from-black via-gray-900 to-black border-2 border-dashed border-white/40 shadow-[0_0_70px_rgba(255,255,255,0.2)] pulse-ring' : ''}
+                              ${!circle.value && gameStatus !== 'playing' && circle.value !== null ? 'grayscale' : ''}
+                              ${isPulsing ? 'scale-110 z-20' : ''}
+                              ${isScoring ? 'border-2 border-blue-500 shadow-[0_0_30px_rgba(30,144,255,1)] z-30 transition-none' : ''}
+                            `}
+                            style={{ 
+                              width: `${circleSize}px`, 
+                              height: `${circleSize}px`,
+                              fontSize: `${circleSize * 0.45}px`
+                            }}
+                          >
+                            {/* LONG-PRESS PULSE: 15% Opacity Halo */}
+                            <AnimatePresence>
+                              {isPulsing && (
+                                <motion.div 
+                                  initial={{ scale: 0.5, opacity: 0 }}
+                                  animate={{ scale: 1.6, opacity: 0.12 }}
+                                  exit={{ scale: 2.2, opacity: 0 }}
+                                  className="absolute inset-0 rounded-full pointer-events-none"
+                                  style={{ backgroundColor: playerColor, filter: 'blur(10px)' }}
+                                />
+                              )}
+                            </AnimatePresence>
+                            {isBlackHole && gameStatus !== 'playing' && (
                               <motion.div 
-                                initial={{ scale: 0.5, opacity: 0 }}
-                                animate={{ scale: 1.5, opacity: 0.15 }}
-                                exit={{ scale: 2, opacity: 0 }}
-                                className="absolute inset-0 rounded-full pointer-events-none"
-                                style={{ backgroundColor: playerColor, filter: 'blur(8px)' }}
+                                animate={{ scale: [1, 1.2, 1], opacity: [0.3, 0.6, 0.3] }}
+                                transition={{ repeat: Infinity, duration: 4 }}
+                                className="absolute inset-[-4px] bg-white/5 rounded-full blur-xl pointer-events-none"
                               />
                             )}
-                          </AnimatePresence>
-                          <span className="italic relative z-10">{circle.value}</span>
-                        </motion.button>
-                      );
-                    })}
-                  </div>
-                ))}
-              </div>
-            ) : (
-              /* SYMMETRICAL PASCAL TRIANGLE (ALL OTHER MODES / DESKTOP) */
-              <div 
-                className="flex flex-col items-center relative z-10 transition-all duration-500 max-w-full"
-                style={{ gap: `${containerWidth < 1024 ? (containerWidth < 640 ? 4 : 8) : 16}px` }}
-              >
-                {rows.map((row, rowIndex) => (
-                  <div key={rowIndex} className="flex touch-none" style={{ gap: `${containerWidth < 1024 ? (containerWidth < 640 ? 4 : 8) : 16}px` }}>
-                    {row.map((circle) => {
-                      const boardIndex = board.findIndex(c => c.row === circle.row && c.col === circle.col);
-                      const isBlackHole = circle.value === null;
-                      const isPulsing = pulsingNeighbors.includes(boardIndex);
-                      const isScoring = scoringCircles.includes(boardIndex);
+                            <AnimatePresence mode="wait">
+                              {circle.value && (
+                                <motion.span
+                                  key="val"
+                                  initial={{ opacity: 0, scale: 0 }}
+                                  animate={{ opacity: 1, scale: 1 }}
+                                  className="italic drop-shadow-md z-10"
+                                >
+                                  {circle.value}
+                                </motion.span>
+                              )}
+                            </AnimatePresence>
+                          </motion.button>
+                        );
+                      })}
+                    </div>
+                  ))}
+                </div>
+              </motion.div>
+            </AnimatePresence>
 
-                      const playerColor = 
-                        currentPlayer === 1 ? 'rgba(37,99,235,1)' : 
-                        currentPlayer === 2 ? 'rgba(239,68,68,1)' : 
-                        currentPlayer === 3 ? 'rgba(16,185,129,1)' : 
-                        currentPlayer === 4 ? 'rgba(147,51,234,1)' : 'rgba(245,158,11,1)';
-                      
-                      return (
-                        <motion.button
-                          key={`${circle.row}-${circle.col}`}
-                          id={`circle-${circle.row}-${circle.col}`}
-                          animate={{
-                            opacity: gameStatus !== 'playing' && !isScoring ? 0.2 : 1,
-                            scale: isScoring ? [1, 1.05, 1] : 1,
-                          }}
-                          transition={{
-                            scale: isScoring ? { repeat: Infinity, duration: 2, ease: "easeInOut" } : { duration: 0.3 }
-                          }}
-                          onMouseEnter={() => setHoveredCircle(boardIndex)}
-                          onMouseLeave={() => setHoveredCircle(null)}
-                          onTouchStart={() => setHoveredCircle(boardIndex)}
-                          onTouchEnd={() => setHoveredCircle(null)}
-                          whileHover={!circle.value && gameStatus === 'playing' ? { scale: 1.15 } : {}}
-                          whileTap={!circle.value && gameStatus === 'playing' ? { scale: 0.9 } : {}}
-                          onClick={() => handleCircleClick(boardIndex)}
-                          disabled={circle.value !== null || gameStatus !== 'playing'}
-                          className={`
-                            compact-circle rounded-full flex items-center justify-center font-black transition-all duration-300 relative touch-manipulation will-change-transform
-                            ${circle.claimedBy === 1 ? 'bg-blue-600 shadow-[0_5px_25px_rgba(37,99,235,0.4)] border-2 border-blue-400' : ''}
-                            ${circle.claimedBy === 2 ? 'bg-red-600 shadow-[0_5px_25px_rgba(239,68,68,0.4)] border-2 border-red-400' : ''}
-                            ${circle.claimedBy === 3 ? 'bg-emerald-600 shadow-[0_5px_25px_rgba(16,185,129,0.4)] border-2 border-emerald-400' : ''}
-                            ${circle.claimedBy === 4 ? 'bg-purple-600 shadow-[0_5px_25px_rgba(147,51,234,0.4)] border-2 border-purple-400' : ''}
-                            ${circle.claimedBy === 5 ? 'bg-amber-500 shadow-[0_5px_30px_rgba(245,158,11,0.6)] border-2 border-amber-300' : ''}
-                            ${circle.claimedBy === 6 ? 'bg-blue-400 shadow-[0_5px_30px_rgba(96,165,250,0.6)] border-2 border-blue-200' : ''}
-                            ${!circle.value && gameStatus === 'playing' ? 'bg-white/5 border border-white/10 hover:bg-white/20 active:bg-white/30 cursor-pointer shadow-inner' : ''}
-                            ${circle.value === null && gameStatus !== 'playing' ? 'bg-gradient-to-br from-black via-gray-900 to-black border-2 border-dashed border-white/40 shadow-[0_0_70px_rgba(255,255,255,0.2)] pulse-ring' : ''}
-                            ${!circle.value && gameStatus !== 'playing' && circle.value !== null ? 'grayscale' : ''}
-                            ${isPulsing ? 'scale-110 z-20' : ''}
-                            ${isScoring ? 'border-2 border-blue-500 shadow-[0_0_30px_rgba(30,144,255,1)] z-30 transition-none' : ''}
-                          `}
-                          style={{ 
-                            width: `${circleSize}px`, 
-                            height: `${circleSize}px`,
-                            fontSize: `${circleSize * 0.45}px`
-                          }}
-                        >
-                          {/* LONG-PRESS PULSE: 15% Opacity Halo */}
-                          <AnimatePresence>
-                            {isPulsing && (
-                              <motion.div 
-                                initial={{ scale: 0.5, opacity: 0 }}
-                                animate={{ scale: 1.6, opacity: 0.12 }}
-                                exit={{ scale: 2.2, opacity: 0 }}
-                                className="absolute inset-0 rounded-full pointer-events-none"
-                                style={{ backgroundColor: playerColor, filter: 'blur(10px)' }}
-                              />
-                            )}
-                          </AnimatePresence>
-                          {isBlackHole && gameStatus !== 'playing' && (
-                            <motion.div 
-                              animate={{ scale: [1, 1.2, 1], opacity: [0.3, 0.6, 0.3] }}
-                              transition={{ repeat: Infinity, duration: 4 }}
-                              className="absolute inset-[-4px] bg-white/5 rounded-full blur-xl pointer-events-none"
-                            />
-                          )}
-                          <AnimatePresence mode="wait">
-                            {circle.value && (
-                              <motion.span
-                                key="val"
-                                initial={{ opacity: 0, scale: 0 }}
-                                animate={{ opacity: 1, scale: 1 }}
-                                className="italic drop-shadow-md z-10"
-                              >
-                                {circle.value}
-                              </motion.span>
-                            )}
-                          </AnimatePresence>
-                        </motion.button>
-                      );
-                    })}
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* REVEAL OVERLAY OVERLAYS ONLY THE PYRAMID */}
+        {/* REVEAL OVERLAY OVERLAYS ONLY THE PYRAMID */}
             <AnimatePresence>
               {gameStatus === 'finished' && (
                 <motion.div 
@@ -911,6 +790,54 @@ export default function App() {
         }
         .pulse-ring { animation: pulse-ring 2.5s infinite; }
       `}</style>
+      <AnimatePresence>
+        {isFormatModalOpen && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] bg-gray-950/90 backdrop-blur-sm flex items-center justify-center p-6"
+          >
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              className="bg-gray-900 border border-white/10 p-8 rounded-[2.5rem] w-full max-w-md shadow-[0_30px_100px_rgba(0,0,0,0.8)]"
+            >
+              <div className="text-center mb-8">
+                <h2 className="text-2xl font-black italic tracking-tight text-white uppercase italic text-center">Select Format</h2>
+                <p className="text-[8px] tracking-[0.4em] font-black opacity-30 mt-2 uppercase text-center">Lobby Archive V1</p>
+              </div>
+              
+              <div className="grid gap-4">
+                {BOARD_CONFIGS.filter(c => c.status === 'Active').map((config) => (
+                  <button
+                    key={config.id}
+                    onClick={() => selectConfig(config)}
+                    className="group flex items-center justify-between p-5 bg-white/5 hover:bg-white/10 border border-white/5 hover:border-white/20 rounded-2xl transition-all active:scale-[0.98]"
+                  >
+                    <div className="flex flex-col items-start">
+                      <span className="text-[10px] font-black opacity-40 uppercase tracking-widest">{config.players} Players</span>
+                      <span className="text-sm font-black text-white uppercase italic">{config.label}</span>
+                    </div>
+                    <div className="flex flex-col items-end opacity-40">
+                      <span className="text-[10px] font-black uppercase tracking-widest">{config.rows} Rows</span>
+                      <span className="text-[10px] font-black">{config.turnsPerPlayer} Turns</span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+
+              <button 
+                onClick={() => setIsFormatModalOpen(false)}
+                className="w-full mt-8 py-4 text-[10px] font-black uppercase tracking-[0.2em] text-white/30 hover:text-white transition-colors"
+              >
+                Cancel
+              </button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -920,7 +847,7 @@ function ActiveTurnDisplay({
   counter, 
   gameStatus 
 }: { 
-  player: 1 | 2 | 3 | 4 | 5; 
+  player: number; 
   counter: number; 
   gameStatus: GameStatus;
 }) {
@@ -940,7 +867,7 @@ function ActiveTurnDisplay({
       initial={false}
       animate={{ scale: isPlaying ? 1 : 0.95 }}
       className={`
-        flex items-center gap-1.5 sm:gap-4 px-2 sm:px-6 py-0.5 sm:py-2 rounded-full border transition-all duration-500
+        flex items-center gap-1.5 sm:gap-4 md:gap-2 px-2 sm:px-6 md:px-3 py-0.5 sm:py-2 rounded-full border transition-all duration-500
         ${getColors()}
         ${!isPlaying ? 'grayscale' : ''}
       `}
@@ -966,7 +893,7 @@ function CompactPlayerHeader({
   isActive, 
   isRevealed 
 }: { 
-  player: 1 | 2 | 3 | 4 | 5; 
+  player: number; 
   counter: number; 
   isActive: boolean;
   isRevealed: boolean;
@@ -977,7 +904,8 @@ function CompactPlayerHeader({
     if (player === 2) return 'bg-red-600 border-red-400';
     if (player === 3) return 'bg-emerald-600 border-emerald-400';
     if (player === 4) return 'bg-purple-600 border-purple-400';
-    return 'bg-amber-500 border-amber-400';
+    if (player === 5) return 'bg-amber-500 border-amber-400';
+    return 'bg-blue-400 border-blue-300';
   };
   
   return (
@@ -1003,7 +931,7 @@ function CompactStandingItem({
   isWinner, 
   compact = false 
 }: { 
-  player: 1 | 2 | 3 | 4 | 5; 
+  player: number; 
   score: number; 
   isWinner: boolean;
   compact?: boolean;
@@ -1013,7 +941,8 @@ function CompactStandingItem({
     if (player === 2) return 'border-red-400/20 shadow-red-500/10';
     if (player === 3) return 'border-emerald-400/20 shadow-emerald-500/10';
     if (player === 4) return 'border-purple-400/20 shadow-purple-500/10';
-    return 'border-amber-400/20 shadow-amber-500/10';
+    if (player === 5) return 'border-amber-400/20 shadow-amber-500/10';
+    return 'border-blue-300/20 shadow-blue-400/10';
   };
   return (
     <div className={`
