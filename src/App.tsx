@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Info, RotateCcw, Trophy, Eye, User, Users } from 'lucide-react';
+import { Info, RotateCcw, Trophy, Eye, User, Users, Dices } from 'lucide-react';
 
 interface CircleState {
   row: number;
@@ -64,101 +64,46 @@ const getPlayerColor = (player: number): string => {
   return '#64748B'; // slate gray default fallback
 };
 
-// Multi-pass random number generator with seed shift / mid-square-like mixing
-let entropySeed = Date.now() ^ Math.floor(Math.random() * 1000000);
+// High-entropy Fisher-Yates shuffle engine powered by window.crypto
+export function shuffleEngine(array: number[]): number[] {
+  const result = [...array];
+  const length = result.length;
+  if (length <= 1) return result;
+  
+  const randomIndices = new Uint32Array(length);
+  try {
+    const cryptoObj = window.crypto || (globalThis as any).crypto;
+    cryptoObj.getRandomValues(randomIndices);
+  } catch (e) {
+    for (let i = 0; i < length; i++) {
+      randomIndices[i] = Math.floor(Math.random() * 4294967296);
+    }
+  }
 
-export function getScrubbedRandom(): number {
-  entropySeed = (entropySeed * 1664525 + 1013904223) % 4294967296;
-  const r1 = entropySeed / 4294967296;
-  const mix = (r1 + Math.random()) % 1.0;
-  return mix;
+  for (let i = length - 1; i > 0; i--) {
+    const rVal = randomIndices[i] / 4294967296;
+    const j = Math.floor(rVal * (i + 1));
+    const temp = result[i];
+    result[i] = result[j];
+    result[j] = temp;
+  }
+  return result;
 }
 
-export function generateVibeHand(
-  turnsPerPlayer: number,
-  options?: {
-    minPos?: number;
-    maxPos?: number;
-    minNeg?: number;
-    maxNeg?: number;
-    useExtended?: boolean;
-    extendedMin?: number;
-    extendedMax?: number;
+export function buildFreshDeck(): number[] {
+  const pool: number[] = [];
+  for (let i = 1; i <= 10; i++) {
+    pool.push(i);
   }
-): number[] {
-  const minP = options?.minPos ?? 1;
-  const maxP = options?.maxPos ?? turnsPerPlayer;
-  const minN = options?.minNeg ?? -turnsPerPlayer;
-  const maxN = options?.maxNeg ?? -1;
+  return shuffleEngine(pool);
+}
 
-  const extMin = options?.extendedMin ?? -50;
-  const extMax = options?.extendedMax ?? 99;
-
-  const hand: number[] = [];
-  let negativeCount = 0;
-  let consecutiveNegatives = 0;
-
-  for (let i = 0; i < turnsPerPlayer; i++) {
-    const maxNegAllowedRatio = 0.25;
-    const canBeNegative = 
-      consecutiveNegatives < 2 && 
-      ((negativeCount + 1) / turnsPerPlayer <= maxNegAllowedRatio);
-
-    const randomRoll = getScrubbedRandom();
-    const isNegative = canBeNegative && (randomRoll < 0.20);
-
-    let val: number;
-    if (isNegative) {
-      const negRandom = getScrubbedRandom();
-      val = Math.floor(negRandom * (maxN - minN + 1)) + minN;
-      negativeCount++;
-      consecutiveNegatives++;
-    } else {
-      const posRandom = getScrubbedRandom();
-      val = Math.floor(posRandom * (maxP - minP + 1)) + minP;
-      consecutiveNegatives = 0;
-    }
-    
-    if (options?.useExtended) {
-      if (val < 0) {
-        const ratio = (val - minN) / (maxN - minN || 1);
-        val = Math.round(extMin + ratio * (-1 - extMin));
-      } else {
-        const ratio = (val - minP) / (maxP - minP || 1);
-        val = Math.round(1 + ratio * (extMax - 1));
-      }
-    }
-
-    hand.push(val);
+export function buildFreshNegativeVault(): number[] {
+  const pool: number[] = [];
+  for (let i = -10; i <= -1; i++) {
+    pool.push(i);
   }
-
-  for (let i = hand.length - 1; i > 0; i--) {
-    const shuffleRoll = getScrubbedRandom();
-    const j = Math.floor(shuffleRoll * (i + 1));
-    const temp = hand[i];
-    hand[i] = hand[j];
-    hand[j] = temp;
-  }
-
-  let verifiedNegCount = 0;
-  let consecCount = 0;
-  for (let i = 0; i < hand.length; i++) {
-    if (hand[i] < 0) {
-      const allowedCount = Math.floor(turnsPerPlayer * 0.25);
-      if (verifiedNegCount >= allowedCount || consecCount >= 1) {
-        const posRandom = getScrubbedRandom();
-        hand[i] = Math.floor(posRandom * (maxP - minP + 1)) + minP;
-        consecCount = 0;
-      } else {
-        verifiedNegCount++;
-        consecCount++;
-      }
-    } else {
-      consecCount = 0;
-    }
-  }
-
-  return hand;
+  return shuffleEngine(pool);
 }
 
 
@@ -214,13 +159,63 @@ export default function App() {
   const [player5Counter, setPlayer5Counter] = useState(1);
   const [player6Counter, setPlayer6Counter] = useState(1);
 
+  // Global exhausted deck engine states
+  const playerShoes = useRef<Record<string, number[]>>({});
+  const negativesInjected = useRef<number>(0);
+  const extremeModeShoes = useRef<number[]>([]);
+  const [isExtremeMode, setIsExtremeMode] = useState<boolean>(false);
+  const [negativeVault, setNegativeVault] = useState<number[]>(() => buildFreshNegativeVault());
+  const [burnedCards, setBurnedCards] = useState<number[]>([]);
+  const [globalTurnIndex, setGlobalTurnIndex] = useState<number>(0);
+
+  const maxAllowedNegatives = useMemo(() => {
+    if (!activeConfig) return 0;
+    const turns = activeConfig.turnsPerPlayer;
+    const adjustedTurns = (turns % 2 !== 0) ? (turns + 1) : turns;
+    return Math.ceil(adjustedTurns / 2) - 1;
+  }, [activeConfig]);
+
+  const initializePlayerShoes = useCallback((config: BoardConfig) => {
+    negativesInjected.current = 0;
+    if (isExtremeMode) {
+      const pool: number[] = [];
+      for (let i = 1; i <= 99; i++) {
+        pool.push(i);
+      }
+      extremeModeShoes.current = shuffleEngine(pool);
+      playerShoes.current = {};
+    } else {
+      const shoes: Record<string, number[]> = {};
+      const playersToSetup = config.players;
+      const limit = config.turnsPerPlayer;
+      
+      for (let p = 1; p <= playersToSetup; p++) {
+        const array: number[] = [];
+        // Push exactly two instances of every valid positive integer (from 1 up to the limit)
+        for (let i = 1; i <= limit; i++) {
+          array.push(i);
+          array.push(i);
+        }
+        shoes[`p${p}`] = shuffleEngine(array);
+      }
+      playerShoes.current = shoes;
+      extremeModeShoes.current = [];
+    }
+  }, [isExtremeMode]);
+
+  useEffect(() => {
+    if (activeConfig) {
+      initializePlayerShoes(activeConfig);
+    }
+  }, [activeConfig, initializePlayerShoes]);
+
   // Volatile Pool hands state
-  const [player1Hand, setPlayer1Hand] = useState<number[]>(() => generateVibeHand(10));
-  const [player2Hand, setPlayer2Hand] = useState<number[]>(() => generateVibeHand(10));
-  const [player3Hand, setPlayer3Hand] = useState<number[]>(() => generateVibeHand(10));
-  const [player4Hand, setPlayer4Hand] = useState<number[]>(() => generateVibeHand(10));
-  const [player5Hand, setPlayer5Hand] = useState<number[]>(() => generateVibeHand(10));
-  const [player6Hand, setPlayer6Hand] = useState<number[]>(() => generateVibeHand(10));
+  const [player1Hand, setPlayer1Hand] = useState<number[]>([]);
+  const [player2Hand, setPlayer2Hand] = useState<number[]>([]);
+  const [player3Hand, setPlayer3Hand] = useState<number[]>([]);
+  const [player4Hand, setPlayer4Hand] = useState<number[]>([]);
+  const [player5Hand, setPlayer5Hand] = useState<number[]>([]);
+  const [player6Hand, setPlayer6Hand] = useState<number[]>([]);
 
   const getPlayerActiveValue = useCallback((p: number, counter: number) => {
     const hand = 
@@ -230,11 +225,97 @@ export default function App() {
       p === 4 ? player4Hand : 
       p === 5 ? player5Hand : player6Hand;
     const val = hand[counter - 1];
-    return val !== undefined ? val : counter;
+    return val !== undefined ? val : null;
   }, [player1Hand, player2Hand, player3Hand, player4Hand, player5Hand, player6Hand]);
   const [gameStatus, setGameStatus] = useState<GameStatus>('playing');
   const [showStrategy, setShowStrategy] = useState(false);
   const [isFormatModalOpen, setIsFormatModalOpen] = useState(false);
+  const [isRolling, setIsRolling] = useState(false);
+  const [hasRolledForCurrentTurn, setHasRolledForCurrentTurn] = useState<boolean>(false);
+
+  // Gamification and rolling history tracking state hooks
+  const [playerXPTokens, setPlayerXPTokens] = useState<number>(0);
+  const [currentTurnRollCount, setCurrentTurnRollCount] = useState<number>(0);
+  const [playerRecentRolls, setPlayerRecentRolls] = useState<number[]>([]);
+  const RE_ROLL_COST = 5;
+
+  useEffect(() => {
+    // Each player change starts a clean micro-phase
+    setCurrentTurnRollCount(0);
+  }, [currentPlayer]);
+
+  const rollVibeDice = () => {
+    if (gameStatus !== 'playing' || isRolling) return;
+    setIsRolling(true);
+    setTimeout(() => {
+      let drawnValue: number;
+
+      if (isExtremeMode) {
+        let shoe = extremeModeShoes.current;
+        if (!shoe || shoe.length === 0) {
+          const pool: number[] = [];
+          for (let i = 1; i <= 99; i++) {
+            pool.push(i);
+          }
+          shoe = shuffleEngine(pool);
+          extremeModeShoes.current = shoe;
+        }
+        const randomIndex = Math.floor(Math.random() * shoe.length);
+        drawnValue = shoe.splice(randomIndex, 1)[0];
+      } else {
+        const activePlayerKey = `p${currentPlayer}`;
+        let shoe = playerShoes.current[activePlayerKey];
+        
+        // Fallback safeguard to dynamically build shoes if missing/empty
+        if (!shoe || shoe.length === 0) {
+          const limit = activeConfig?.turnsPerPlayer || 10;
+          const array: number[] = [];
+          for (let i = 1; i <= limit; i++) {
+            array.push(i);
+            array.push(i);
+          }
+          shoe = shuffleEngine(array);
+          playerShoes.current[activePlayerKey] = shoe;
+        }
+
+        const randomIndex = Math.floor(Math.random() * shoe.length);
+        drawnValue = shoe.splice(randomIndex, 1)[0];
+      }
+
+      // Deliver this exact value to matching player's hand state
+      const currentCounter = 
+        currentPlayer === 1 ? player1Counter : 
+        currentPlayer === 2 ? player2Counter : 
+        currentPlayer === 3 ? player3Counter : 
+        currentPlayer === 4 ? player4Counter : 
+        currentPlayer === 5 ? player5Counter : player6Counter;
+
+      const setHand = 
+        currentPlayer === 1 ? setPlayer1Hand : 
+        currentPlayer === 2 ? setPlayer2Hand : 
+        currentPlayer === 3 ? setPlayer3Hand : 
+        currentPlayer === 4 ? setPlayer4Hand : 
+        currentPlayer === 5 ? setPlayer5Hand : setPlayer6Hand;
+
+      setHand((prevHand) => {
+        const nextHand = [...prevHand];
+        nextHand[currentCounter - 1] = drawnValue;
+        return nextHand;
+      });
+
+      // Update recent rolls list
+      const nextRecent = [...playerRecentRolls, drawnValue];
+      if (nextRecent.length > 3) {
+        nextRecent.shift();
+      }
+      setPlayerRecentRolls(nextRecent);
+
+      const nextRollCount = currentTurnRollCount + 1;
+      setCurrentTurnRollCount(nextRollCount);
+      setIsRolling(false);
+      setHasRolledForCurrentTurn(true);
+    }, 450);
+  };
 
   const emptyCirclesCount = board.filter((c) => c.value === null).length;
   const isGameOver = emptyCirclesCount === 1;
@@ -255,7 +336,7 @@ export default function App() {
   };
 
   const scores = useMemo(() => {
-    if (gameStatus !== 'revealed') return { p1: 0, p2: 0, p3: 0, p4: 0, p5: 0, p6: 0 };
+    if (gameStatus !== 'revealed' && gameStatus !== 'finished') return { p1: 0, p2: 0, p3: 0, p4: 0, p5: 0, p6: 0 };
     const blackHole = board.find(c => c.value === null);
     if (!blackHole) return { p1: 0, p2: 0, p3: 0, p4: 0, p5: 0, p6: 0 };
     const neighborCoords = getNeighbors(blackHole.row, blackHole.col);
@@ -303,6 +384,8 @@ export default function App() {
 
   const handleCircleClick = (index: number) => {
     if (gameStatus !== 'playing' || board[index].value !== null) return;
+    if (!hasRolledForCurrentTurn) return; // Strict roll-to-unlock lockout
+
     const newBoard = [...board];
     const currentCounter = 
       currentPlayer === 1 ? player1Counter : 
@@ -315,6 +398,47 @@ export default function App() {
     newBoard[index] = { ...newBoard[index], value: valToPlace, claimedBy: currentPlayer };
     setBoard(newBoard);
     
+    setHasRolledForCurrentTurn(false); // Lock the board back
+
+    // Increment global turn and run Lifeline Checks
+    const nextGlobalTurn = globalTurnIndex + 1;
+    setGlobalTurnIndex(nextGlobalTurn);
+
+    // Automated physical injection triggers
+    const isMilestone = (nextGlobalTurn % 15 === 0);
+    const isSurpriseBlessing = Math.random() < 0.02;
+
+    if (isMilestone || isSurpriseBlessing) {
+      if (negativesInjected.current < maxAllowedNegatives) {
+        negativesInjected.current += 1;
+        setNegativeVault((prevVault) => {
+          let activeVault = [...prevVault];
+          if (activeVault.length === 0) {
+            activeVault = buildFreshNegativeVault();
+          }
+          const poppedCard = activeVault.shift()!;
+          
+          if (isExtremeMode) {
+            if (!extremeModeShoes.current) {
+              extremeModeShoes.current = [];
+            }
+            extremeModeShoes.current.push(poppedCard);
+            extremeModeShoes.current = shuffleEngine(extremeModeShoes.current);
+          } else {
+            // Push this negative integer directly into the active player's playerShoes array
+            const activePlayerKey = `p${currentPlayer}`;
+            if (!playerShoes.current[activePlayerKey]) {
+              playerShoes.current[activePlayerKey] = [];
+            }
+            playerShoes.current[activePlayerKey].push(poppedCard);
+            playerShoes.current[activePlayerKey] = shuffleEngine(playerShoes.current[activePlayerKey]);
+          }
+          
+          return activeVault;
+        });
+      }
+    }
+
     if (currentPlayer === 1) {
       setPlayer1Counter((prev) => prev + 1);
       if (player1Counter >= maxTurnsPerPlayer && allPlayersReachedMax(1)) {
@@ -356,13 +480,31 @@ export default function App() {
     setPlayer4Counter(1);
     setPlayer5Counter(1);
     setPlayer6Counter(1);
-    setPlayer1Hand(generateVibeHand(10));
-    setPlayer2Hand(generateVibeHand(10));
-    setPlayer3Hand(generateVibeHand(10));
-    setPlayer4Hand(generateVibeHand(10));
-    setPlayer5Hand(generateVibeHand(10));
-    setPlayer6Hand(generateVibeHand(10));
+    setPlayer1Hand([]);
+    setPlayer2Hand([]);
+    setPlayer3Hand([]);
+    setPlayer4Hand([]);
+    setPlayer5Hand([]);
+    setPlayer6Hand([]);
+    
+    // Refresh deck
+    const freshVault = buildFreshNegativeVault();
+    setNegativeVault(freshVault);
+    setBurnedCards([]);
+    setGlobalTurnIndex(0);
+    negativesInjected.current = 0;
+    
+    // Initialize shoes for default 2P format
+    const defaultConfig = BOARD_CONFIGS.find(c => c.players === 2 && c.status === 'Active') || 
+                          BOARD_CONFIGS.find(c => c.players === 2) || 
+                          BOARD_CONFIGS[0];
+    initializePlayerShoes(defaultConfig);
+
+    setHasRolledForCurrentTurn(false); // Default to locked
     setGameStatus('playing');
+    setPlayerXPTokens(0);
+    setCurrentTurnRollCount(0);
+    setPlayerRecentRolls([]);
   };
 
   const selectConfig = (config: BoardConfig) => {
@@ -375,14 +517,28 @@ export default function App() {
     setPlayer4Counter(1);
     setPlayer5Counter(1);
     setPlayer6Counter(1);
-    setPlayer1Hand(generateVibeHand(config.turnsPerPlayer));
-    setPlayer2Hand(generateVibeHand(config.turnsPerPlayer));
-    setPlayer3Hand(generateVibeHand(config.turnsPerPlayer));
-    setPlayer4Hand(generateVibeHand(config.turnsPerPlayer));
-    setPlayer5Hand(generateVibeHand(config.turnsPerPlayer));
-    setPlayer6Hand(generateVibeHand(config.turnsPerPlayer));
+    setPlayer1Hand([]);
+    setPlayer2Hand([]);
+    setPlayer3Hand([]);
+    setPlayer4Hand([]);
+    setPlayer5Hand([]);
+    setPlayer6Hand([]);
+
+    // Refresh deck
+    const freshVault = buildFreshNegativeVault();
+    setNegativeVault(freshVault);
+    setBurnedCards([]);
+    setGlobalTurnIndex(0);
+    negativesInjected.current = 0;
+
+    initializePlayerShoes(config);
+
+    setHasRolledForCurrentTurn(false); // Default to locked
     setGameStatus('playing');
     setIsFormatModalOpen(false);
+    setPlayerXPTokens(0);
+    setCurrentTurnRollCount(0);
+    setPlayerRecentRolls([]);
   };
 
   const rows = useMemo(() => {
@@ -410,7 +566,33 @@ export default function App() {
   if (playerCount === 6 && scores.p6 === minScore) winners.push(6);
 
   const winner = winners.length === 1 ? winners[0] : 0;
-  const isDraw = gameStatus === 'revealed' && winners.length > 1;
+  const isDraw = (gameStatus === 'revealed' || gameStatus === 'finished') && winners.length > 1;
+
+  const blackHole = useMemo(() => {
+    return board.find(c => c.value === null);
+  }, [board]);
+
+  const blackHoleSurrounds = useMemo(() => {
+    if (!blackHole) return [];
+    const neighborCoords = getNeighbors(blackHole.row, blackHole.col);
+    const result: { player: number; value: number; row: number; col: number }[] = [];
+    neighborCoords.forEach(([nr, nc]) => {
+      const neighbor = board.find(c => c.row === nr && c.col === nc);
+      if (neighbor && neighbor.value !== null && neighbor.claimedBy !== null) {
+        result.push({
+          player: neighbor.claimedBy,
+          value: neighbor.value,
+          row: nr,
+          col: nc
+        });
+      }
+    });
+    return result;
+  }, [board, blackHole, totalRows]);
+
+  const isDiceLocked = useMemo(() => {
+    return hasRolledForCurrentTurn || (currentTurnRollCount >= 1 && playerXPTokens < RE_ROLL_COST);
+  }, [hasRolledForCurrentTurn, currentTurnRollCount, playerXPTokens, RE_ROLL_COST]);
 
   // DYNAMIC SCALING ENGINE
   const containerRef = useRef<HTMLDivElement>(null);
@@ -441,7 +623,7 @@ export default function App() {
     
     // Height-based calculation
     const isRevealed = gameStatus === 'revealed';
-    const wingBuffer = isRevealed ? (containerWidth < 640 ? 60 : 80) : 0;
+    const wingBuffer = isRevealed ? (containerWidth < 1024 ? (containerWidth < 640 ? 60 : 80) : 0) : 0;
     const safetyHeight = (containerHeight - wingBuffer) * 0.85; // 15% safety gutter for height
     const availableHeight = safetyHeight - (totalGaps * GAP);
     const sizeFromHeight = availableHeight / totalRows;
@@ -499,7 +681,7 @@ export default function App() {
         <div className="flex-none flex items-center gap-2 sm:gap-3 lg:w-48">
           <div className="hidden sm:block">
             <h1 className="text-xl lg:text-2xl font-black italic tracking-tight uppercase leading-none bg-gradient-to-br from-white to-white/40 bg-clip-text text-transparent">Black Hole</h1>
-            <p className="text-[7px] uppercase tracking-[0.8em] font-bold opacity-30 mt-1">V3.0 - FLEXIBLE MATRIX</p>
+            <p className="text-[7px] uppercase tracking-[0.8em] font-bold opacity-30 mt-1">V3.2 - KINETIC LOCKOUT</p>
           </div>
           <div className="sm:hidden w-7 h-7 bg-white/10 rounded-lg flex items-center justify-center font-black italic text-[10px]">BH</div>
         </div>
@@ -510,7 +692,6 @@ export default function App() {
           <ActiveTurnDisplay 
             player={currentPlayer} 
             counter={currentCPCounter} 
-            value={currentCPNextValue}
             gameStatus={gameStatus}
             className="px-4 py-2"
           />
@@ -531,7 +712,6 @@ export default function App() {
           <ActiveTurnDisplay 
             player={currentPlayer} 
             counter={currentCPCounter} 
-            value={currentCPNextValue}
             gameStatus={gameStatus}
             className="px-3 py-1.5"
           />
@@ -571,7 +751,7 @@ export default function App() {
                   initial={{ opacity: 0, y: 10, scale: 0.95 }}
                   animate={{ opacity: 1, y: 0, scale: 1 }}
                   exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                  className="absolute top-full right-0 mt-3 w-64 p-5 bg-black/95 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] z-[100] text-left"
+                  className="absolute top-full right-0 mt-3 w-72 p-5 bg-black/95 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] z-[100] text-left"
                 >
                   <div className="flex items-center gap-2 mb-4 border-b border-white/5 pb-2">
                     <div className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-pulse" />
@@ -589,6 +769,14 @@ export default function App() {
                      </div>
                    ))}
                   </div>
+
+                  {/* SUCCESS CONDITIONS CHECKLIST */}
+                  <div className="mt-4 pt-4 border-t border-white/5 space-y-1.5">
+                    <h4 className="text-[8px] font-black uppercase tracking-[0.15em] text-cyan-400">Success Conditions Checklist</h4>
+                    <p className="text-[9.5px] text-white/70 leading-relaxed font-medium">
+                      The single remaining unselected cell forms the <strong className="text-white">Black Hole</strong>. All outer coordinates are sucked in except adjacent direct neighbors. The player holding the <strong className="text-cyan-400 font-bold">lowest sum</strong> on these adjacent locations takes the board.
+                    </p>
+                  </div>
                 </motion.div>
               )}
             </AnimatePresence>
@@ -604,24 +792,27 @@ export default function App() {
           
           {/* Post-game elements rendered inside the main play area */}
           <AnimatePresence>
-            {gameStatus === 'revealed' && (
+            {(gameStatus === 'revealed' || gameStatus === 'finished') && (
               <>
-                {/* Mobile Left Flank (Resolution Badge) - placed at top just below the header */}
+                {/* Mobile Left Flank (Champion Card) - placed at top just below the header */}
                 <motion.div 
                   initial={{ opacity: 0, y: -20, scale: 0.95 }}
                   animate={{ opacity: 1, y: 0, scale: 1 }}
                   exit={{ opacity: 0, y: -20, scale: 0.95 }}
-                  className={`absolute left-3 sm:left-6 top-3 sm:top-6 lg:hidden pointer-events-auto z-40 p-2.5 sm:p-3.5 rounded-2xl border backdrop-blur-md flex flex-col items-center justify-center w-[94px] sm:w-[124px] text-center shadow-2xl gap-1
-                    ${isDraw ? 'bg-white/5 border-white/10 text-white' : 'bg-white text-black border-blue-600 shadow-[0_0_30px_rgba(37,99,235,0.15)]'}
-                  `}
+                  className="absolute left-3 sm:left-6 top-3 sm:top-6 lg:hidden pointer-events-auto z-40 p-2.5 sm:p-3.5 rounded-2xl border backdrop-blur-md flex flex-col items-center justify-center w-[94px] sm:w-[124px] text-center shadow-2xl gap-1"
+                  style={{ 
+                    borderColor: `${getPlayerColor(winner)}55`,
+                    backgroundColor: `${getPlayerColor(winner)}1A`,
+                    boxShadow: `0 0 15px ${getPlayerColor(winner)}22`
+                  }}
                 >
-                  <Trophy size={14} className={isDraw ? 'text-white/40' : 'text-blue-600'} />
-                  <span className="text-[7px] sm:text-[9px] font-black uppercase tracking-[0.1em] opacity-40">Result</span>
-                  <span className="text-xs sm:text-base font-black italic uppercase leading-none mt-0.5">
+                  <Trophy size={14} className="animate-bounce" style={{ color: getPlayerColor(winner) }} />
+                  <span className="text-[7px] sm:text-[9px] font-black uppercase tracking-[0.1em] opacity-60">CHAMPION</span>
+                  <span className="text-xs sm:text-base font-black italic uppercase leading-none mt-0.5" style={{ color: getPlayerColor(winner) }}>
                     {isDraw ? "DRAW" : `P${winner}`}
                   </span>
                   {!isDraw && (
-                    <span className="text-[6px] sm:text-[8px] font-bold opacity-50 mt-1">
+                    <span className="text-[7px] sm:text-[9px] font-mono font-black opacity-80 mt-1">
                       SUM: {minScore}
                     </span>
                   )}
@@ -689,56 +880,52 @@ export default function App() {
                 className="flex items-center justify-center w-full h-full"
               >
                 <div className="relative">
-                  {/* Desktop wings rendered symmetrically on left and right of the apex level */}
+                  {/* MOBILE Proximal Digit Readout: Positioned directly at the top or centered apex of the triangle (lg:hidden) */}
                   <AnimatePresence>
-                    {gameStatus === 'revealed' && (
-                      <>
-                        {/* Desktop Left Wing (xl screens only): Victory Badge */}
-                        <motion.div 
-                          initial={{ opacity: 0, x: -30, scale: 0.9 }}
-                          animate={{ opacity: 1, x: 0, scale: 1 }}
-                          exit={{ opacity: 0, x: -30, scale: 0.9 }}
-                          className={`absolute bottom-[calc(100%+2rem)] xl:right-[calc(100%+32px)] hidden xl:flex flex-col justify-center gap-0.5 p-3.5 rounded-2xl border backdrop-blur-md w-[200px] h-[58px] shadow-2xl transition-all pointer-events-auto z-40
-                            ${isDraw ? 'bg-white/5 border-white/10 text-white' : 'bg-white text-black border-blue-500 shadow-[0_0_30px_rgba(37,99,235,0.15)]'}
-                          `}
-                        >
-                          <div className="flex items-center gap-1.5 leading-none">
-                            {!isDraw && <Trophy className="text-blue-600 animate-bounce w-3.5 h-3.5" />}
-                            <span className="text-[9px] font-black uppercase tracking-[0.2em] opacity-50">Resolution</span>
-                          </div>
-                          <div className="flex flex-col leading-tight mt-0.5">
-                            <span className="text-xs font-black italic uppercase tracking-tight">
-                              {isDraw ? "SUDDEN DRAW" : `PLAYER ${winner}`}
-                            </span>
-                            {!isDraw && (
-                              <span className="text-[7px] font-black opacity-50 uppercase tracking-widest leading-none mt-0.5">
-                                BEST SUM: {minScore}
-                              </span>
-                            )}
-                          </div>
-                        </motion.div>
-
-                        {/* Desktop Right Wing (xl screens only): Contextual Reset Board */}
-                        <motion.div 
-                          initial={{ opacity: 0, x: 30, scale: 0.9 }}
-                          animate={{ opacity: 1, x: 0, scale: 1 }}
-                          exit={{ opacity: 0, x: 30, scale: 0.9 }}
-                          className="absolute bottom-[calc(100%+2rem)] xl:left-[calc(100%+32px)] hidden xl:flex pointer-events-auto z-40 w-[200px]"
-                        >
-                          <button 
-                            onClick={resetGame}
-                            className="flex items-center gap-2.5 px-5 py-3.5 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-[0_0_30px_rgba(37,99,235,0.3)] border border-blue-400/50 w-full h-[58px] justify-center transition-all"
+                    {gameStatus === 'playing' && (
+                      <motion.div
+                        initial={{ opacity: 0, scale: 0.7, y: 10 }}
+                        animate={{ opacity: 1, scale: 1, y: 0 }}
+                        exit={{ opacity: 0, scale: 0.7, y: 10 }}
+                        transition={{ duration: 0.3 }}
+                        className="absolute bottom-[calc(100%+8px)] left-1/2 -translate-x-1/2 mb-4 lg:hidden pointer-events-auto z-40 flex flex-col items-center justify-center gap-1"
+                      >
+                        {isDiceLocked ? (
+                          <motion.div 
+                            className={`flex flex-col items-center justify-center bg-black/90 border-2 py-2 px-5 min-w-[84px] rounded-2xl shadow-2xl backdrop-blur-md animate-pulse ${currentCPNextValue !== null && currentCPNextValue < 0 ? "scale-115 border-cyan-400" : ""}`}
+                            style={currentCPNextValue !== null && currentCPNextValue < 0 ? {
+                              borderColor: '#00F2FE'
+                            } : {
+                              borderColor: getPlayerColor(currentPlayer)
+                            }}
                           >
-                            <RotateCcw className="animate-spin-slow w-3.5 h-3.5" />
-                            <span>Reset Board</span>
-                          </button>
-                        </motion.div>
-                      </>
+                            <span className="text-[6.5px] uppercase tracking-widest text-white/50 font-black">
+                              {currentCPNextValue !== null && currentCPNextValue < 0 ? "⚡ LIFELINE IN PLAY" : "Value in Play"}
+                            </span>
+                            <span 
+                              className="text-2xl sm:text-3xl font-black italic tracking-tighter mt-0.5 bg-black"
+                              style={currentCPNextValue !== null && currentCPNextValue < 0 ? {
+                                color: '#00F2FE',
+                                textShadow: '0 0 25px #00F2FE, 0 0 15px #4FACFE, 0 0 8px #0575E6'
+                              } : { 
+                                color: getPlayerColor(currentPlayer), 
+                                textShadow: `0 0 15px ${getPlayerColor(currentPlayer)}ff, 0 0 5px ${getPlayerColor(currentPlayer)}99` 
+                              }}
+                            >
+                              {currentCPNextValue !== null && currentCPNextValue >= 0 ? `+${currentCPNextValue}` : currentCPNextValue}
+                            </span>
+                          </motion.div>
+                        ) : (
+                          <div className="px-4 py-1.5 bg-black/60 border border-white/10 rounded-full text-[9px] font-black tracking-widest text-white/40 uppercase animate-pulse">
+                            ROLL TO UNLOCK
+                          </div>
+                        )}
+                      </motion.div>
                     )}
                   </AnimatePresence>
 
                   <div 
-                    className="flex flex-col items-center relative z-10 transition-all duration-500 max-w-full"
+                    className={`flex flex-col items-center relative z-10 transition-all duration-500 max-w-full ${gameStatus === 'playing' && !isDiceLocked ? 'pointer-events-none opacity-60' : ''}`}
                     style={{ gap: `${containerWidth < 1024 ? (containerWidth < 640 ? 4 : 8) : 16}px` }}
                   >
                     {rows.map((row, rowIndex) => (
@@ -827,6 +1014,44 @@ export default function App() {
                     </div>
                   ))}
                 </div>
+
+                {/* MOBILE Vibe Dice Button: Positioned below the Pascal Triangle (lg:hidden) */}
+                <AnimatePresence>
+                  {gameStatus === 'playing' && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 15 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: 15 }}
+                      transition={{ duration: 0.3 }}
+                      className="mt-6 flex justify-center items-center lg:hidden relative z-40 pointer-events-auto w-full"
+                    >
+                      <motion.button
+                        disabled={isDiceLocked || isRolling}
+                        onClick={rollVibeDice}
+                        whileHover={!(isDiceLocked || isRolling) ? { scale: 1.05 } : {}}
+                        whileTap={!(isDiceLocked || isRolling) ? { scale: 0.95 } : {}}
+                        className={`flex items-center gap-2.5 px-6 py-3 bg-gray-900 border border-white/10 rounded-xl transition-all shadow-xl text-white select-none relative group overflow-hidden ${
+                          (isDiceLocked || isRolling)
+                            ? 'pointer-events-none opacity-40 cursor-not-allowed'
+                            : 'cursor-pointer hover:border-blue-500/40'
+                        }`}
+                      >
+                        <div className="absolute inset-0 bg-gradient-to-r from-blue-500/10 to-purple-500/10 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+                        <motion.div
+                          animate={isRolling ? { rotate: 360 } : {}}
+                          transition={isRolling ? { repeat: Infinity, duration: 0.5, ease: "linear" } : { duration: 0.3 }}
+                          className="text-blue-400 group-hover:text-blue-300 shrink-0"
+                        >
+                          <Dices size={18} />
+                        </motion.div>
+                        <div className="flex flex-col items-start text-left leading-none">
+                          <span className="text-[10px] sm:text-[11px] font-black uppercase tracking-wider text-white">Vibe Dice</span>
+                          <span className="text-[7.5px] sm:text-[8px] font-bold text-white/40 uppercase tracking-widest mt-0.5 group-hover:text-blue-400/80 transition-colors">Re-roll pool</span>
+                        </div>
+                      </motion.button>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
             </motion.div>
           </AnimatePresence>
@@ -865,47 +1090,49 @@ export default function App() {
         <aside className="hidden lg:flex border-l border-white/5 p-6 flex-col gap-6 justify-between bg-white/[0.01] h-full overflow-y-auto">
           
           <div className="space-y-6">
-            {/* Integrated Post-Game Ribbons for Landscape Tablets/Smaller Desktops to prevent clipping/overlap */}
-            {gameStatus === 'revealed' && (
-              <div className="flex flex-col gap-3 xl:hidden">
-                {/* Integrated Resolution Ribbon */}
-                <div className={`p-3.5 rounded-xl border backdrop-blur-md flex flex-col justify-center gap-1 shadow-xl transition-all
-                  ${isDraw ? 'bg-white/5 border-white/10 text-white' : 'bg-white text-black border-blue-500 shadow-[0_0_20px_rgba(37,99,235,0.15)]'}
-                `}>
-                  <div className="flex items-center gap-1.5 leading-none">
-                    {!isDraw && <Trophy size={14} className="text-blue-600 animate-bounce" />}
-                    <span className="text-[9px] font-black uppercase tracking-[0.2em] opacity-50">Resolution</span>
-                  </div>
-                  <div className="flex flex-col leading-tight mt-1">
-                    <span className="text-xs font-black italic uppercase tracking-tight leading-none">
-                      {isDraw ? "SUDDEN DRAW" : `PLAYER ${winner}`}
+            {/* DETAILED COLLAPSE BREAKDOWN ON GAME STATUS FINISHED/REVEALED */}
+            {(gameStatus === 'finished' || gameStatus === 'revealed') && (
+              <motion.div 
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="p-5 rounded-2xl bg-black/90 border border-white/10 space-y-4 shadow-2xl relative overflow-hidden pointer-events-auto"
+              >
+                {/* Background ambient pulse */}
+                <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 via-transparent to-purple-500/5 pointer-events-none" />
+
+                {/* Winner Prominent Card */}
+                <div 
+                  className="p-5 rounded-xl border flex flex-col items-center justify-center text-center relative z-10"
+                  style={{ 
+                    borderColor: `${getPlayerColor(winner)}44`,
+                    backgroundColor: `${getPlayerColor(winner)}0F`,
+                    boxShadow: `0 0 25px ${getPlayerColor(winner)}15`
+                  }}
+                >
+                  <Trophy size={32} className="mb-2 animate-bounce hover:scale-110 transition-transform" style={{ color: getPlayerColor(winner) }} />
+                  <span className="text-[8px] font-black tracking-[0.2em] uppercase opacity-75">CHAMPION PORT POSSESSION</span>
+                  <span className="text-xl font-black tracking-tight mt-1" style={{ color: getPlayerColor(winner) }}>
+                    {isDraw ? "SUDDEN DRAW / TIE" : `PLAYER ${winner}`}
+                  </span>
+                  {!isDraw && (
+                    <span className="text-xs font-black mt-1.5 opacity-90 px-3 py-1 rounded bg-white/5 border border-white/5">
+                      Sum Score: <span className="font-mono text-cyan-400 font-black">{minScore}</span>
                     </span>
-                    {!isDraw && (
-                      <span className="text-[7.5px] font-black opacity-50 uppercase tracking-widest leading-none mt-1">
-                        BEST SUM: {minScore}
-                      </span>
-                    )}
-                  </div>
+                  )}
                 </div>
 
-                {/* Integrated Reset Ribbon */}
-                <button 
-                  onClick={resetGame}
-                  className="w-full h-[44px] flex items-center justify-center gap-2 py-3 bg-blue-600 hover:bg-blue-500 text-white font-black text-[10px] uppercase tracking-widest rounded-xl shadow-lg border border-blue-400/50 transition-all active:scale-95 duration-200"
-                >
-                  <RotateCcw size={12} className="animate-spin-slow" />
-                  <span>Reset Board</span>
-                </button>
-              </div>
+              </motion.div>
             )}
 
+            
             {/* HIGH-DENSITY SCOREBOARD (VISIBLE STARTING FROM GAME BOOT) */}
             <div className="space-y-3">
               <h2 className="text-[10px] font-black uppercase tracking-[0.3em] opacity-40">Tournament Tally</h2>
               <div className="grid grid-cols-2 gap-2">
                 {[1, 2, 3, 4, 5, 6].filter(p => p <= playerCount).map(p => {
                   const color = getPlayerColor(p);
-                  const isWinnerP = gameStatus === 'revealed' && winners.includes(p);
+                  const isFinishedOrRevealed = gameStatus === 'revealed' || gameStatus === 'finished';
+                  const isWinnerP = isFinishedOrRevealed && winners.includes(p);
                   const scoreVal = scores[`p${p}` as keyof typeof scores];
                   const counter = 
                     p === 1 ? player1Counter : 
@@ -930,7 +1157,7 @@ export default function App() {
                         backgroundColor: 'rgba(255,255,255,0.01)'
                       }}
                       className={`flex flex-col p-3 rounded-xl border transition-all duration-300 
-                        ${gameStatus === 'revealed' ? (isWinnerP ? 'opacity-100 scale-100' : 'opacity-40 grayscale scale-95') : (isActive ? 'opacity-100 scale-[1.02]' : 'opacity-65 scale-95')}
+                        ${isFinishedOrRevealed ? (isWinnerP ? 'opacity-100 scale-100' : 'opacity-40 grayscale scale-95') : (isActive ? 'opacity-100 scale-[1.02]' : 'opacity-65 scale-95')}
                       `}
                     >
                       <div className="flex items-center gap-1.5 mb-1 justify-between">
@@ -944,15 +1171,19 @@ export default function App() {
                       <div className="flex items-baseline justify-between mt-1">
                         <span 
                           className="text-lg font-black italic tracking-tighter"
-                          style={{ color: (gameStatus === 'revealed' && isWinnerP) ? color : isActive ? color : 'inherit' }}
+                          style={{ color: (isFinishedOrRevealed && isWinnerP) ? color : isActive ? color : 'inherit' }}
                         >
-                          {gameStatus === 'revealed' ? scoreVal : 0}
+                          {isFinishedOrRevealed ? scoreVal : 0}
                         </span>
                         <div className="flex flex-col items-end leading-none">
                           <span className="text-[7px] font-black opacity-30 uppercase tracking-widest">{progressText}</span>
                           {gameStatus === 'playing' && (
                             <span className="text-[8px] font-black opacity-80 text-cyan-400 mt-1">
-                              NEXT: {getPlayerActiveValue(p, counter) >= 0 ? `+${getPlayerActiveValue(p, counter)}` : getPlayerActiveValue(p, counter)}
+                              NEXT: {(() => {
+                                const val = getPlayerActiveValue(p, counter);
+                                if (val === null || val === undefined) return '??';
+                                return val >= 0 ? `+${val}` : val;
+                              })()}
                             </span>
                           )}
                         </div>
@@ -962,6 +1193,75 @@ export default function App() {
                 })}
               </div>
             </div>
+
+            {/* DESKTOP VIBE DICE & DIGIT DISPLAY CAPSULE (PLAY STATE ONLY) */}
+            <AnimatePresence>
+              {gameStatus === 'playing' && (
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.95 }}
+                  transition={{ duration: 0.3 }}
+                  className="bg-slate-950/60 border border-slate-800 rounded-2xl p-1.5 flex items-center shadow-2xl w-full"
+                >
+                  <motion.button
+                    disabled={isDiceLocked || isRolling}
+                    onClick={rollVibeDice}
+                    whileHover={!(isDiceLocked || isRolling) ? { scale: 1.02 } : {}}
+                    whileTap={!(isDiceLocked || isRolling) ? { scale: 0.98 } : {}}
+                    className={`flex items-center gap-2.5 px-3.5 py-3 rounded-xl bg-slate-900/40 hover:bg-slate-900/80 transition-colors text-white select-none relative group overflow-hidden flex-1 justify-center ${
+                      (isDiceLocked || isRolling)
+                        ? 'pointer-events-none opacity-40 cursor-not-allowed'
+                        : 'cursor-pointer'
+                    }`}
+                  >
+                    <div className="absolute inset-0 bg-gradient-to-r from-blue-500/10 to-purple-500/10 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+                    <motion.div
+                      animate={isRolling ? { rotate: 360 } : {}}
+                      transition={isRolling ? { repeat: Infinity, duration: 0.5, ease: "linear" } : { duration: 0.3 }}
+                      className="text-blue-400 group-hover:text-blue-300 shrink-0"
+                    >
+                      <Dices size={20} />
+                    </motion.div>
+                    <div className="flex flex-col items-start text-left leading-none">
+                      <span className="text-[10px] lg:text-[11px] font-black uppercase tracking-wider text-white">VIBE DICE</span>
+                      <span className="text-[7.5px] lg:text-[8px] font-bold text-white/40 uppercase tracking-widest mt-0.5 group-hover:text-blue-400/80 transition-colors">TAP TO SPIN</span>
+                    </div>
+                  </motion.button>
+
+                  {/* Clean vertical border rule divider */}
+                  <div className="border-r border-slate-800/80 h-8 mx-2" />
+
+                  {/* High-visibility dedicated display vault for the integer output */}
+                  <div 
+                    className="w-[72px] h-12 flex items-center justify-center bg-black/50 border border-slate-900/60 rounded-xl relative overflow-hidden select-none shrink-0"
+                  >
+                    {isDiceLocked ? (
+                      <div className="flex items-center justify-center">
+                        <motion.span 
+                          initial={{ scale: 0.8 }}
+                          animate={{ scale: 1 }}
+                          className="text-2xl lg:text-3xl font-black italic tracking-tighter animate-pulse"
+                          style={currentCPNextValue !== null && currentCPNextValue < 0 ? {
+                            color: '#00F2FE', // Neon Cyan Lifeline Wave
+                            textShadow: '0 0 20px #00F2FE, 0 0 10px #4FACFE, 0 0 5px #0575E6'
+                          } : { 
+                            color: getPlayerColor(currentPlayer), 
+                            textShadow: `0 0 12px ${getPlayerColor(currentPlayer)}ff, 0 0 4px ${getPlayerColor(currentPlayer)}88` 
+                          }}
+                        >
+                          {currentCPNextValue !== null && currentCPNextValue >= 0 ? `+${currentCPNextValue}` : currentCPNextValue}
+                        </motion.span>
+                      </div>
+                    ) : (
+                      <span className="text-xs lg:text-sm font-black tracking-wider text-slate-700 select-none uppercase">
+                        ROLL
+                      </span>
+                    )}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
 
           {/* PERSISTENT ACTION RESET BUTTONS AT BOTTOM OF SIDEBAR */}
@@ -1067,6 +1367,27 @@ export default function App() {
           100% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0); }
         }
         .pulse-ring { animation: pulse-ring 2.5s infinite; }
+        
+        /* Custom smooth seamless scroll */
+        .custom-smooth-scroll {
+          scroll-behavior: smooth;
+          -webkit-overflow-scrolling: touch;
+          scrollbar-width: thin;
+          scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+        }
+        .custom-smooth-scroll::-webkit-scrollbar {
+          width: 4px;
+        }
+        .custom-smooth-scroll::-webkit-scrollbar-track {
+          background: transparent;
+        }
+        .custom-smooth-scroll::-webkit-scrollbar-thumb {
+          background: rgba(255, 255, 255, 0.16);
+          border-radius: 99px;
+        }
+        .custom-smooth-scroll::-webkit-scrollbar-thumb:hover {
+          background: rgba(255, 255, 255, 0.32);
+        }
       `}</style>
       <AnimatePresence>
         {isFormatModalOpen && (
@@ -1082,14 +1403,37 @@ export default function App() {
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.9, opacity: 0, y: 15 }}
               onClick={(e) => e.stopPropagation()}
-              className="bg-gray-900 border border-white/10 p-5 sm:p-6 md:p-6 rounded-[2rem] w-[90vw] h-[112vw] md:w-full md:h-auto max-w-xl md:aspect-square md:max-h-[480px] md:max-w-[480px] flex flex-col justify-between shadow-[0_30px_100px_rgba(0,0,0,0.8)]"
+              className="bg-gray-900 border border-white/10 p-5 sm:p-6 md:p-6 rounded-[2rem] w-[92vw] h-[78vh] max-h-[580px] md:w-full md:h-auto max-w-xl md:aspect-square md:max-h-[480px] md:max-w-[480px] flex flex-col justify-between shadow-[0_30px_100px_rgba(0,0,0,0.8)]"
             >
-              <div className="text-center mb-3 md:mb-4">
+              <div className="text-center mb-2 md:mb-3">
                 <h2 className="text-xl sm:text-2xl font-black italic tracking-tight text-white uppercase text-center">Select Format</h2>
                 <p className="text-[7px] sm:text-[8px] tracking-[0.4em] font-black opacity-30 mt-1 uppercase text-center">Lobby Archive V1</p>
+                
+                {/* Extreme Volatility Toggle */}
+                <div className="mt-2.5 flex flex-col items-center justify-center">
+                  <div className="flex items-center gap-2 bg-black/60 border border-white/5 px-3 py-1 rounded-full relative overflow-hidden transition-all duration-300">
+                    <span className={`text-[8px] font-black tracking-widest uppercase transition-colors duration-300 ${isExtremeMode ? 'text-red-500 animate-pulse' : 'text-white/40'}`}>
+                      EXTREME VOLATILITY MODE
+                    </span>
+                    <button
+                      onClick={() => setIsExtremeMode(!isExtremeMode)}
+                      className={`relative w-8 h-4.5 rounded-full p-0.5 transition-colors duration-300 cursor-pointer ${isExtremeMode ? 'bg-red-600 shadow-[0_0_10px_rgba(239,68,68,0.8)]' : 'bg-white/10'}`}
+                      style={{ outline: "none" }}
+                    >
+                      <div
+                        className={`w-3.5 h-3.5 rounded-full bg-white transition-transform duration-300 shadow-sm ${isExtremeMode ? 'translate-x-3.5 bg-red-100' : 'translate-x-0'}`}
+                      />
+                    </button>
+                  </div>
+                  {isExtremeMode && (
+                    <span className="text-[6.5px] font-black text-red-500 tracking-wider mt-1 animate-pulse uppercase">
+                      ⚠️ WARNING: 1-99 DECK • ALL UNIQUE • ABSOLUTE SINGLE DELETION
+                    </span>
+                  )}
+                </div>
               </div>
               
-              <div className="grid grid-cols-2 gap-3 sm:gap-4 overflow-y-auto py-1 pr-1 flex-1">
+              <div className="grid grid-cols-2 gap-3 sm:gap-4 overflow-y-auto py-1 pr-1 flex-1 custom-smooth-scroll">
                 {BOARD_CONFIGS.filter(c => c.status === 'Active').map((config) => {
                   let title = '';
                   let pTag = `${config.players}P`;
@@ -1149,13 +1493,11 @@ export default function App() {
 function ActiveTurnDisplay({ 
   player, 
   counter, 
-  value,
   gameStatus,
   className = ""
 }: { 
   player: number; 
   counter: number; 
-  value: number;
   gameStatus: GameStatus;
   className?: string;
 }) {
@@ -1191,15 +1533,6 @@ function ActiveTurnDisplay({
         <span className="text-[6px] sm:text-[8px] uppercase font-black opacity-40">Claim</span>
         <span className="text-xs sm:text-sm font-black italic tracking-tighter leading-none">#{counter}</span>
       </div>
-
-      <div className="h-4 sm:h-5 w-px bg-white/20" />
-
-      <div className="flex flex-col items-center leading-none gap-0.5">
-        <span className="text-[6px] sm:text-[8px] uppercase font-black opacity-40">Value</span>
-        <span className="text-xs sm:text-sm font-black italic tracking-tighter leading-none text-cyan-400">
-          {value >= 0 ? `+${value}` : value}
-        </span>
-      </div>
     </motion.div>
   );
 }
@@ -1213,7 +1546,7 @@ function CompactPlayerHeader({
 }: { 
   player: number; 
   counter: number; 
-  value: number;
+  value?: number | null;
   isActive: boolean;
   isRevealed: boolean;
 }) {
@@ -1235,7 +1568,7 @@ function CompactPlayerHeader({
       </div>
       <div className="flex flex-col">
         <span className="text-[10px] sm:text-[12px] lg:text-[16px] font-black italic tracking-tighter leading-none">
-          #{counter} ({value >= 0 ? `+${value}` : value})
+          #{counter}
         </span>
         <span className="text-[5px] uppercase font-bold opacity-30 tracking-[0.1em] hidden lg:block">P{player}</span>
       </div>
