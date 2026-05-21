@@ -107,6 +107,20 @@ export function buildFreshNegativeVault(): number[] {
 }
 
 
+export const ANOMALY_COSTS = {
+  VOID_CHARGE: 40,
+  PARASITE_ORBIT: 30,
+  GRAVITY_WELL: 25,
+  DECAY_SINGULARITY: 20,
+};
+
+export const EXTREME_ANOMALY_COSTS = {
+  VOID_CHARGE: 50,
+  PARASITE_ORBIT: 35,
+  GRAVITY_WELL: 30,
+  DECAY_SINGULARITY: 25,
+};
+
 // Lobby Filtering Logic prepared for future UI
 export default function App() {
   const [playerCount, setPlayerCount] = useState<number>(2);
@@ -232,6 +246,11 @@ export default function App() {
   const [isFormatModalOpen, setIsFormatModalOpen] = useState(false);
   const [isRolling, setIsRolling] = useState(false);
   const [hasRolledForCurrentTurn, setHasRolledForCurrentTurn] = useState<boolean>(false);
+
+  // Volatile Anomalies Section States
+  const [activeMatchWallets, setActiveMatchWallets] = useState<Record<number, number>>(() => ({ 1: 100, 2: 100 }));
+  const [armedAnomaly, setArmedAnomaly] = useState<'VOID_CHARGE' | 'PARASITE_ORBIT' | 'GRAVITY_WELL' | 'DECAY_SINGULARITY' | null>(null);
+  const [decaySingularities, setDecaySingularities] = useState<number[]>([]);
 
   // Gamification and rolling history tracking state hooks
   const [playerXPTokens, setPlayerXPTokens] = useState<number>(0);
@@ -386,6 +405,15 @@ export default function App() {
     if (gameStatus !== 'playing' || board[index].value !== null) return;
     if (!hasRolledForCurrentTurn) return; // Strict roll-to-unlock lockout
 
+    const playerTokens = activeMatchWallets[currentPlayer] || 0;
+    if (armedAnomaly) {
+      const cost = isExtremeMode ? EXTREME_ANOMALY_COSTS[armedAnomaly] : ANOMALY_COSTS[armedAnomaly];
+      if (playerTokens < cost) {
+        // terminate the action, bypass the matrix modifications, and preserve the player's standard turn state
+        return;
+      }
+    }
+
     const newBoard = [...board];
     const currentCounter = 
       currentPlayer === 1 ? player1Counter : 
@@ -395,9 +423,197 @@ export default function App() {
       currentPlayer === 5 ? player5Counter : player6Counter;
       
     const valToPlace = getPlayerActiveValue(currentPlayer, currentCounter);
-    newBoard[index] = { ...newBoard[index], value: valToPlace, claimedBy: currentPlayer };
+
+    // Apply token deductions and modifications if weapon is armed
+    if (armedAnomaly) {
+      const cost = isExtremeMode ? EXTREME_ANOMALY_COSTS[armedAnomaly] : ANOMALY_COSTS[armedAnomaly];
+      setActiveMatchWallets(prev => ({
+        ...prev,
+        [currentPlayer]: Math.max(0, (prev[currentPlayer] || 0) - cost)
+      }));
+
+      if (armedAnomaly === 'VOID_CHARGE') {
+        const neighbors = getNeighbors(board[index].row, board[index].col);
+        // Clean target
+        newBoard[index] = { ...newBoard[index], value: null, claimedBy: null };
+        // Clean 1-ring neighbors
+        neighbors.forEach(([nr, nc]) => {
+          const nId = newBoard.findIndex(c => c.row === nr && c.col === nc);
+          if (nId !== -1) {
+            newBoard[nId] = { ...newBoard[nId], value: null, claimedBy: null };
+          }
+        });
+
+        // Add 2 to 2-ring neighbors in extreme mode (Void Cataclysm)
+        if (isExtremeMode) {
+          const oneRingIds = new Set(neighbors.map(([nr, nc]) => `${nr},${nc}`));
+          const targetKey = `${board[index].row},${board[index].col}`;
+          const ring2Set = new Set<string>();
+          
+          neighbors.forEach(([nr, nc]) => {
+            const ring2 = getNeighbors(nr, nc);
+            ring2.forEach(([r2r, r2c]) => {
+              const key2 = `${r2r},${r2c}`;
+              if (key2 !== targetKey && !oneRingIds.has(key2)) {
+                ring2Set.add(key2);
+              }
+            });
+          });
+
+          ring2Set.forEach(keyStr => {
+            const [r2r, r2c] = keyStr.split(',').map(Number);
+            const nId2 = newBoard.findIndex(c => c.row === r2r && c.col === r2c);
+            if (nId2 !== -1) {
+              const touched = newBoard[nId2];
+              if (touched.value !== null && touched.claimedBy !== null) {
+                newBoard[nId2] = { ...touched, value: Math.min(10, touched.value + 2) };
+              }
+            }
+          });
+        }
+      } else if (armedAnomaly === 'PARASITE_ORBIT') {
+        newBoard[index] = { ...newBoard[index], value: valToPlace, claimedBy: currentPlayer };
+        const neighbors = getNeighbors(board[index].row, board[index].col);
+        const rival = playerCount === 2 ? (currentPlayer === 1 ? 2 : 1) : ((currentPlayer % playerCount) + 1);
+        
+        // Find 1-ring and 2-ring cells depending on isExtremeMode
+        const targetKey = `${board[index].row},${board[index].col}`;
+        const affectedSet = new Set<string>();
+        neighbors.forEach(([nr, nc]) => {
+          affectedSet.add(`${nr},${nc}`);
+        });
+
+        if (isExtremeMode) {
+          neighbors.forEach(([nr, nc]) => {
+            const ring2 = getNeighbors(nr, nc);
+            ring2.forEach(([r2r, r2c]) => {
+              const key2 = `${r2r},${r2c}`;
+              if (key2 !== targetKey) {
+                affectedSet.add(key2);
+              }
+            });
+          });
+        }
+
+        affectedSet.forEach(keyStr => {
+          const [nr, nc] = keyStr.split(',').map(Number);
+          const nId = newBoard.findIndex(c => c.row === nr && c.col === nc);
+          if (nId !== -1) {
+            const node = newBoard[nId];
+            if (node.value === null) {
+              const randomHighVal = Math.floor(Math.random() * 4) + 7; // Generates 7, 8, 9, or 10
+              newBoard[nId] = { ...newBoard[nId], value: randomHighVal, claimedBy: rival };
+            } else if (isExtremeMode && node.claimedBy !== null && node.claimedBy !== currentPlayer) {
+              // Parasite Overdrive: infect rival piece, steal control and halve value
+              const newVal = Math.max(1, Math.ceil(node.value / 2));
+              newBoard[nId] = { ...node, value: newVal, claimedBy: currentPlayer };
+            }
+          }
+        });
+      } else if (armedAnomaly === 'GRAVITY_WELL') {
+        let highestOpponentId = -1;
+        let highestOpponentVal = -Infinity;
+
+        if (isExtremeMode) {
+          // Find highest opponent piece ANYWHERE on the board (Warp Gate)
+          newBoard.forEach((node, nId) => {
+            if (node.claimedBy !== null && node.claimedBy !== currentPlayer && node.value !== null && node.value > 0) {
+              if (node.value > highestOpponentVal) {
+                highestOpponentVal = node.value;
+                highestOpponentId = nId;
+              }
+            }
+          });
+        } else {
+          // Adjacent adjacent only (standard Gravity Well)
+          const neighbors = getNeighbors(board[index].row, board[index].col);
+          neighbors.forEach(([nr, nc]) => {
+            const nId = newBoard.findIndex(c => c.row === nr && c.col === nc);
+            if (nId !== -1) {
+              const node = newBoard[nId];
+              if (node.claimedBy !== null && node.claimedBy !== currentPlayer && node.value !== null && node.value > 0) {
+                if (node.value > highestOpponentVal) {
+                  highestOpponentVal = node.value;
+                  highestOpponentId = nId;
+                }
+              }
+            }
+          });
+        }
+
+        if (highestOpponentId !== -1) {
+          const oppNode = newBoard[highestOpponentId];
+          if (isExtremeMode) {
+            // Swap, transferring 2 points from our placed piece and adding it to their piece
+            const boostedVal = Math.min(10, oppNode.value + 2);
+            const reducedVal = Math.max(1, valToPlace - 2);
+            newBoard[index] = { ...newBoard[index], value: boostedVal, claimedBy: oppNode.claimedBy };
+            newBoard[highestOpponentId] = { ...newBoard[highestOpponentId], value: reducedVal, claimedBy: currentPlayer };
+          } else {
+            // Normal swap
+            newBoard[index] = { ...newBoard[index], value: oppNode.value, claimedBy: oppNode.claimedBy };
+            newBoard[highestOpponentId] = { ...newBoard[highestOpponentId], value: valToPlace, claimedBy: currentPlayer };
+          }
+        } else {
+          newBoard[index] = { ...newBoard[index], value: valToPlace, claimedBy: currentPlayer };
+        }
+      } else if (armedAnomaly === 'DECAY_SINGULARITY') {
+        if (isExtremeMode) {
+          // Siphon Decay: Deduct points from our placed piece and transfer them to the adjacent opponents
+          const neighbors = getNeighbors(board[index].row, board[index].col);
+          const enemyNeighbors: number[] = [];
+          
+          neighbors.forEach(([nr, nc]) => {
+            const nId = newBoard.findIndex(c => c.row === nr && c.col === nc);
+            if (nId !== -1) {
+              const touchedNode = newBoard[nId];
+              if (touchedNode.value !== null && touchedNode.claimedBy !== null && touchedNode.claimedBy !== currentPlayer) {
+                enemyNeighbors.push(nId);
+              }
+            }
+          });
+
+          if (enemyNeighbors.length > 0) {
+            // Deduct up to 3 points from placed piece, keeping it at least 1
+            const deductAmount = Math.min(3, valToPlace - 1);
+            
+            // Add 3 points up to 10 to each adjacent enemy piece
+            enemyNeighbors.forEach(nId => {
+              const touchedNode = newBoard[nId];
+              const currentVal = touchedNode.value ?? 0;
+              newBoard[nId] = {
+                ...touchedNode,
+                value: Math.min(10, currentVal + 3)
+              };
+            });
+            
+            newBoard[index] = { ...newBoard[index], value: valToPlace - deductAmount, claimedBy: currentPlayer };
+          } else {
+            // No adjacent enemies: just place standard piece
+            newBoard[index] = { ...newBoard[index], value: valToPlace, claimedBy: currentPlayer };
+          }
+        } else {
+          // Standard Decay: subtract 1 from all adjacent pieces
+          newBoard[index] = { ...newBoard[index], value: valToPlace, claimedBy: currentPlayer };
+          const neighbors = getNeighbors(board[index].row, board[index].col);
+          neighbors.forEach(([nr, nc]) => {
+            const nId = newBoard.findIndex(c => c.row === nr && c.col === nc);
+            if (nId !== -1) {
+              const touchedNode = newBoard[nId];
+              if (touchedNode.value !== null && touchedNode.claimedBy !== null) {
+                const newVal = Math.max(1, touchedNode.value - 1);
+                newBoard[nId] = { ...touchedNode, value: newVal };
+              }
+            }
+          });
+        }
+      }
+    } else {
+      newBoard[index] = { ...newBoard[index], value: valToPlace, claimedBy: currentPlayer };
+    }
+
     setBoard(newBoard);
-    
+    setArmedAnomaly(null); // Unarm weapon
     setHasRolledForCurrentTurn(false); // Lock the board back
 
     // Increment global turn and run Lifeline Checks
@@ -420,7 +636,7 @@ export default function App() {
           
           if (isExtremeMode) {
             if (!extremeModeShoes.current) {
-              extremeModeShoes.current = [];
+               extremeModeShoes.current = [];
             }
             extremeModeShoes.current.push(poppedCard);
             extremeModeShoes.current = shuffleEngine(extremeModeShoes.current);
@@ -505,6 +721,11 @@ export default function App() {
     setPlayerXPTokens(0);
     setCurrentTurnRollCount(0);
     setPlayerRecentRolls([]);
+
+    // Anomaly Layer initialization
+    setActiveMatchWallets({ 1: 100, 2: 100 });
+    setArmedAnomaly(null);
+    setDecaySingularities([]);
   };
 
   const selectConfig = (config: BoardConfig) => {
@@ -539,6 +760,15 @@ export default function App() {
     setPlayerXPTokens(0);
     setCurrentTurnRollCount(0);
     setPlayerRecentRolls([]);
+
+    // Anomaly Layer initialization based on participants
+    const wallets: Record<number, number> = {};
+    for (let i = 1; i <= config.players; i++) {
+      wallets[i] = 100;
+    }
+    setActiveMatchWallets(wallets);
+    setArmedAnomaly(null);
+    setDecaySingularities([]);
   };
 
   const rows = useMemo(() => {
@@ -681,7 +911,7 @@ export default function App() {
         <div className="flex-none flex items-center gap-2 sm:gap-3 lg:w-48">
           <div className="hidden sm:block">
             <h1 className="text-xl lg:text-2xl font-black italic tracking-tight uppercase leading-none bg-gradient-to-br from-white to-white/40 bg-clip-text text-transparent">Black Hole</h1>
-            <p className="text-[7px] uppercase tracking-[0.8em] font-bold opacity-30 mt-1">V3.2 - KINETIC LOCKOUT</p>
+            <p className="text-[7px] uppercase tracking-[0.8em] font-bold opacity-30 mt-1">V3.3 - VOLATILE ANOMALIES</p>
           </div>
           <div className="sm:hidden w-7 h-7 bg-white/10 rounded-lg flex items-center justify-center font-black italic text-[10px]">BH</div>
         </div>
@@ -785,8 +1015,133 @@ export default function App() {
       </header>
 
       {/* DASHBOARD CONTENT GRID */}
-      <div className="flex-1 overflow-y-auto lg:overflow-hidden grid grid-cols-1 lg:grid-cols-[1fr_320px] landscape:short:grid-cols-[1fr_180px] h-full relative z-10 transition-all duration-500">
+      <div className="flex-1 overflow-y-auto lg:overflow-hidden grid grid-cols-1 lg:grid-cols-[240px_1fr_320px] landscape:short:grid-cols-[1fr_180px] h-full relative z-10 transition-all duration-500">
         
+        {/* SIDEBAR - LEFT Volatile Anomalies (Visible on Desktop lg) */}
+        <aside className="hidden lg:flex border-r border-white/5 p-4 flex-col gap-4 bg-[#020202]/30 h-full overflow-y-auto select-none">
+          <AnimatePresence>
+            {gameStatus === 'playing' ? (
+              <motion.div
+                initial={{ opacity: 0, x: -10 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -10 }}
+                className="space-y-3 w-full"
+              >
+                <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+                    <h3 className="text-[10px] font-black uppercase tracking-[0.15em] text-cyan-400">Volatile anomalies</h3>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-2">
+                  {[
+                    {
+                      key: 'VOID_CHARGE',
+                      name: isExtremeMode ? 'Void Cataclysm 💥' : 'Void Charge',
+                      desc: isExtremeMode ? 'Clears target and 1-ring neighbors, and adds 2 points to any survivable pieces in the 2-ring coordinate radius!' : 'Clears target cell & all 6 direct neighbors back to empty.',
+                      cost: isExtremeMode ? EXTREME_ANOMALY_COSTS.VOID_CHARGE : ANOMALY_COSTS.VOID_CHARGE,
+                      color: '#EF4444'
+                    },
+                    {
+                      key: 'PARASITE_ORBIT',
+                      name: isExtremeMode ? 'Parasite Overdrive 🧬' : 'Parasite Orbit',
+                      desc: isExtremeMode ? 'Infects 1-ring and 2-ring radius: claims empty slots with high-value (7-10) rival pieces, and steals occupied rival pieces (halves value)!' : 'Claim slot + fills empty neighbors with rival high-value (7-10) marbles.',
+                      cost: isExtremeMode ? EXTREME_ANOMALY_COSTS.PARASITE_ORBIT : ANOMALY_COSTS.PARASITE_ORBIT,
+                      color: '#A855F7'
+                    },
+                    {
+                      key: 'GRAVITY_WELL',
+                      name: isExtremeMode ? 'Warp Gate 🌀' : 'Gravity Well',
+                      desc: isExtremeMode ? 'Swaps coordinate with highest-value opponent piece ANYWHERE, transferring 2 points from your piece to theirs!' : 'Swaps coordinate with adjacent highest opponent piece.',
+                      cost: isExtremeMode ? EXTREME_ANOMALY_COSTS.GRAVITY_WELL : ANOMALY_COSTS.GRAVITY_WELL,
+                      color: '#3B82F6'
+                    },
+                    {
+                      key: 'DECAY_SINGULARITY',
+                      name: isExtremeMode ? 'Siphon Decay 💀' : 'Decay Singularity',
+                      desc: isExtremeMode ? 'Siphons value from your placed piece to add up to 3 points to each adjacent opponent piece!' : 'Instantly subtracts 1 from all touching adjacent player pieces on placement.',
+                      cost: isExtremeMode ? EXTREME_ANOMALY_COSTS.DECAY_SINGULARITY : ANOMALY_COSTS.DECAY_SINGULARITY,
+                      color: '#10B981'
+                    }
+                  ].map(anomaly => {
+                    const cost = anomaly.cost;
+                    const bal = activeMatchWallets[currentPlayer] ?? 100;
+                    const canAfford = bal >= cost;
+                    const isArmed = armedAnomaly === anomaly.key;
+                    const activePlayerColor = getPlayerColor(currentPlayer);
+
+                    return (
+                      <motion.button
+                        key={anomaly.key}
+                        disabled={!canAfford}
+                        whileHover={canAfford ? { 
+                          scale: 1.05, 
+                          y: -3, 
+                          boxShadow: isArmed 
+                            ? `0 8px 25px ${activePlayerColor}55` 
+                            : `0 8px 20px ${anomaly.color}33`,
+                          borderColor: isArmed ? activePlayerColor : `${anomaly.color}aa`
+                        } : {}}
+                        whileTap={canAfford ? { scale: 0.98, y: 0 } : {}}
+                        onClick={() => {
+                          if (isArmed) {
+                            setArmedAnomaly(null);
+                          } else {
+                            setArmedAnomaly(anomaly.key as any);
+                          }
+                        }}
+                        className={`w-full text-left p-2.5 rounded-xl border transition-all duration-300 relative overflow-hidden group flex flex-col gap-1
+                          ${isArmed 
+                            ? 'bg-slate-900/60 border-2' 
+                            : canAfford 
+                              ? 'bg-slate-950/50 border-white/5 hover:bg-slate-900/40 hover:border-white/10 cursor-pointer' 
+                              : 'bg-slate-950/20 border-white/5 opacity-40 cursor-not-allowed'
+                          }
+                        `}
+                        style={isArmed ? { 
+                          borderColor: activePlayerColor,
+                          boxShadow: `0 0 15px ${activePlayerColor}44`
+                        } : {}}
+                      >
+                        {/* Top row */}
+                        <div className="flex items-center justify-between w-full">
+                          <span 
+                            className="text-[10px] font-black uppercase tracking-wider block"
+                            style={{ color: isArmed ? activePlayerColor : '#FFFFFF' }}
+                          >
+                            {anomaly.name} {isArmed && '● ARMED'}
+                          </span>
+                          <span className="text-[9px] font-mono text-amber-400 font-bold bg-amber-400/5 px-2 py-0.5 rounded border border-amber-400/10">
+                            🪙 {cost} TK
+                          </span>
+                        </div>
+
+                        {/* Description */}
+                        <span className="text-[8.5px] leading-tight text-white/40 group-hover:text-white/80 transition-colors duration-300 block font-medium">
+                          {anomaly.desc}
+                        </span>
+                      </motion.button>
+                    );
+                  })}
+                </div>
+              </motion.div>
+            ) : (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="text-center py-8 text-white/25 text-[10px] font-black uppercase tracking-widest leading-relaxed p-4 border border-dashed border-white/5 rounded-2xl"
+              >
+                Anomaly Shop Locked
+                <span className="block text-[8px] font-mono opacity-50 mt-1 lowercase font-normal">Game not active</span>
+              </motion.div>
+            )}
+          </AnimatePresence>
+          <div className="text-center opacity-25 text-[7px] font-bold tracking-[0.2em] uppercase">
+            Anomaly Engine Active
+          </div>
+        </aside>
+
         {/* PYRAMID MAIN AREA */}
         <main className="flex-1 flex flex-col relative min-h-0 overflow-hidden lg:overflow-visible p-4 sm:p-6 lg:p-8 justify-center">
           
@@ -1163,9 +1518,11 @@ export default function App() {
                       <div className="flex items-center gap-1.5 mb-1 justify-between">
                         <div className="flex items-center gap-1">
                           <div className={`w-1.5 h-1.5 rounded-full ${isActive ? 'animate-ping' : 'animate-pulse'}`} style={{ backgroundColor: color }} />
-                          <span className="text-[8px] font-black tracking-wider opacity-40">PLAYER {p}</span>
+                          <span className="text-[8px] font-black tracking-wider opacity-45">PLAYER {p}</span>
                         </div>
-                        {isActive && <span className="text-[6px] font-black bg-white/10 text-white/90 px-1 rounded-sm uppercase tracking-wide">Turn</span>}
+                        <div className="flex items-center gap-1 text-[8.5px] font-mono text-amber-400 bg-amber-400/5 border border-amber-400/20 px-1 py-0.5 rounded font-black leading-none">
+                          🪙 {activeMatchWallets[p] !== undefined ? activeMatchWallets[p] : 100}
+                        </div>
                       </div>
 
                       <div className="flex items-baseline justify-between mt-1">
@@ -1262,6 +1619,8 @@ export default function App() {
                 </motion.div>
               )}
             </AnimatePresence>
+
+            
           </div>
 
           {/* PERSISTENT ACTION RESET BUTTONS AT BOTTOM OF SIDEBAR */}
@@ -1345,11 +1704,15 @@ export default function App() {
 
       {/* COMPACT LOW-PROFILE FOOTER */}
       <footer className="h-[var(--f-height)] lg:h-[var(--f-height-lg)] shrink-0 border-t border-white/5 bg-black/60 backdrop-blur-xl flex items-center justify-between px-6 sm:px-8 relative z-50 transition-all duration-300">
-         <div className="text-[6px] lg:text-[7px] font-black uppercase tracking-[0.4em] opacity-20 italic">VOID_STRAT SYSTEM</div>
-         <div className="flex items-center gap-4">
-            <span className="text-[6px] lg:text-[7px] font-black uppercase tracking-[0.2em] opacity-10">© 2024</span>
+         <div className="text-[6px] lg:text-[7px] font-black uppercase tracking-[0.4em] opacity-20 italic">
+           VOID_STRAT SYSTEM <span className="text-cyan-400 opacity-60 ml-1.5 font-mono">V2.1.0-EXTREME</span>
+         </div>
+         <div className="flex items-center gap-3 sm:gap-4">
+            <span className="text-[6px] lg:text-[7px] font-black uppercase tracking-[0.2em] opacity-10">© 2026</span>
             <div className="w-1 h-1 bg-white/10 rounded-full" />
             <span className="text-[6px] lg:text-[7px] font-black uppercase tracking-[0.2em] opacity-10 font-mono">STABLE_REL</span>
+            <div className="w-1 h-1 bg-white/10 rounded-full" />
+            <span className="text-[6px] lg:text-[7px] font-[#31a3b8] font-bold tracking-[0.2em] opacity-25 font-mono">V2.1.0</span>
          </div>
       </footer>
 
